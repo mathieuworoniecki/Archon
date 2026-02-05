@@ -1,0 +1,150 @@
+services:
+  # =============================================================================
+  # FRONTEND - React + Vite served by Nginx
+  # =============================================================================
+  frontend:
+    build: ./frontend
+    container_name: finders-frontend
+    ports:
+      - "3100:80"
+    depends_on:
+      - backend
+    networks:
+      - finders_network
+    restart: unless-stopped
+
+  # =============================================================================
+  # BACKEND - FastAPI Application
+  # =============================================================================
+  backend:
+    build: ./backend
+    container_name: finders-backend
+    ports:
+      - "8100:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - MEILISEARCH_URL=http://meilisearch:7700
+      - QDRANT_URL=http://qdrant:6333
+      - DATABASE_URL=sqlite:///./data/finders.db
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - TESSERACT_CMD=/usr/bin/tesseract
+    volumes:
+      - backend_data:/app/data
+      - ${DOCUMENTS_PATH:-./documents}:/documents:ro
+    depends_on:
+      meilisearch:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - finders_network
+    restart: unless-stopped
+
+  # =============================================================================
+  # CELERY WORKER - Background Task Processing
+  # =============================================================================
+  celery-worker:
+    build: ./backend
+    container_name: finders-celery
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - MEILISEARCH_URL=http://meilisearch:7700
+      - QDRANT_URL=http://qdrant:6333
+      - DATABASE_URL=sqlite:///./data/finders.db
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - TESSERACT_CMD=/usr/bin/tesseract
+    volumes:
+      - backend_data:/app/data
+      - ${DOCUMENTS_PATH:-./documents}:/documents:ro
+    depends_on:
+      meilisearch:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - finders_network
+    restart: unless-stopped
+
+  # =============================================================================
+  # MEILISEARCH - Full-text search engine with highlighting
+  # =============================================================================
+  meilisearch:
+    image: getmeili/meilisearch:v1.6
+    container_name: finders-meilisearch
+    ports:
+      - "7701:7700"
+    volumes:
+      - meilisearch_data:/meili_data
+    environment:
+      - MEILI_ENV=development
+      - MEILI_NO_ANALYTICS=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - finders_network
+    restart: unless-stopped
+
+  # =============================================================================
+  # QDRANT - Vector database for semantic search
+  # =============================================================================
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: finders-qdrant
+    ports:
+      - "6335:6333"
+      - "6336:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - finders_network
+    restart: unless-stopped
+
+  # =============================================================================
+  # REDIS - Message broker for Celery
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: finders-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - finders_network
+    restart: unless-stopped
+
+volumes:
+  meilisearch_data:
+    name: finders_meilisearch_data
+  qdrant_data:
+    name: finders_qdrant_data
+  redis_data:
+    name: finders_redis_data
+  backend_data:
+    name: finders_backend_data
+
+networks:
+  finders_network:
+    name: finders_network

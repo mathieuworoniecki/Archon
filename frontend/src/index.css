@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222 47% 4%;
+    --foreground: 210 40% 98%;
+    
+    --card: 222 47% 6%;
+    --card-foreground: 210 40% 98%;
+    
+    --popover: 222 47% 6%;
+    --popover-foreground: 210 40% 98%;
+    
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 4%;
+    
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+    
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+    
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 98%;
+    
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 98%;
+    
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --ring: 217 91% 60%;
+    
+    --highlight: 48 96% 53%;
+    --highlight-foreground: 222 47% 4%;
+    
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--muted));
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--primary));
+}
+
+/* Highlight styling for search results */
+mark {
+  background-color: hsl(var(--highlight));
+  color: hsl(var(--highlight-foreground));
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* Panel resize handle */
+[data-panel-group-direction="horizontal"] > [data-panel-resize-handle-enabled] {
+  width: 4px !important;
+  background: hsl(var(--border));
+  transition: background 0.2s;
+}
+
+[data-panel-group-direction="horizontal"] > [data-panel-resize-handle-enabled]:hover {
+  background: hsl(var(--primary));
+}
+
+/* PDF viewer container */
+.pdf-container {
+  @apply w-full h-full overflow-auto;
+}
+
+.pdf-container .react-pdf__Page {
+  @apply mx-auto;
+}
+
+/* Loading animation */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted)) 25%,
+    hsl(var(--border)) 50%,
+    hsl(var(--muted)) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
