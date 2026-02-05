@@ -1,0 +1,24 @@
+# WSL2 Configuration for Archon
+# Place this file at: C:\Users\<YourUsername>\.wslconfig
+# Then restart WSL: wsl --shutdown
+
+[wsl2]
+# Allocate 96GB RAM to WSL (leaving ~96GB for Windows)
+memory=96GB
+
+# Use all available processors
+processors=0
+
+# 64GB swap for large scan operations
+swap=64GB
+
+# GPU passthrough if available
+guiApplications=false
+
+# Nested virtualization for Docker
+nestedVirtualization=true
+
+[experimental]
+# Use sparse VHD for faster disk IO
+sparseVhd=true
+autoMemoryReclaim=gradual

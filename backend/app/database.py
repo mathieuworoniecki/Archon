@@ -9,10 +9,15 @@ from .models import Base
 
 settings = get_settings()
 
-# Create engine
+# Create engine - detect if SQLite or PostgreSQL
+connect_args = {}
+if settings.database_url.startswith("sqlite"):
+    connect_args["check_same_thread"] = False
+
 engine = create_engine(
     settings.database_url,
-    connect_args={"check_same_thread": False}  # SQLite specific
+    connect_args=connect_args,
+    pool_pre_ping=True  # PostgreSQL connection health check
 )
 
 # Create session factory

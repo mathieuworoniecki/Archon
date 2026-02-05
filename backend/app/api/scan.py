@@ -33,14 +33,15 @@ def create_scan(scan_in: ScanCreate, db: Session = Depends(get_db)):
     # Create scan record
     scan = Scan(
         path=str(path.absolute()),
-        status=ScanStatus.PENDING
+        status=ScanStatus.PENDING,
+        enable_embeddings=1 if scan_in.enable_embeddings else 0
     )
     db.add(scan)
     db.commit()
     db.refresh(scan)
     
-    # Launch Celery task
-    task = run_scan.delay(scan.id)
+    # Launch Celery task with embeddings option
+    task = run_scan.delay(scan.id, scan_in.enable_embeddings)
     
     # Update with task ID
     scan.celery_task_id = task.id
@@ -48,6 +49,74 @@ def create_scan(scan_in: ScanCreate, db: Session = Depends(get_db)):
     db.refresh(scan)
     
     return scan
+
+
+@router.post("/estimate")
+def estimate_scan(path: str):
+    """
+    Estimate scan costs and file count before launching.
+    Returns file count and embedding cost estimation.
+    """
+    from pathlib import Path
+    import os
+    
+    target_path = Path(path)
+    if not target_path.exists():
+        raise HTTPException(status_code=400, detail=f"Path does not exist: {path}")
+    
+    # Count files
+    supported_extensions = {
+        '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp',
+        '.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.log',
+        '.mp4', '.webm', '.mov', '.avi', '.mkv'
+    }
+    
+    file_count = 0
+    size_bytes = 0
+    type_counts = {"pdf": 0, "image": 0, "text": 0, "video": 0}
+    
+    for root, _, files in os.walk(target_path):
+        for filename in files:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in supported_extensions:
+                file_count += 1
+                try:
+                    file_path = os.path.join(root, filename)
+                    size_bytes += os.path.getsize(file_path)
+                except:
+                    pass
+                
+                if ext == '.pdf':
+                    type_counts["pdf"] += 1
+                elif ext in {'.mp4', '.webm', '.mov', '.avi', '.mkv'}:
+                    type_counts["video"] += 1
+                elif ext in {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp'}:
+                    type_counts["image"] += 1
+                else:
+                    type_counts["text"] += 1
+    
+    # Estimate tokens and costs
+    # Average ~500 tokens per document for embeddings
+    estimated_tokens = file_count * 500
+    
+    # Gemini embedding pricing
+    PRICE_PER_MILLION = 0.15  # USD
+    FREE_TIER_LIMIT = 1500  # requests per minute (approximate daily limit ~2M requests)
+    
+    estimated_cost_usd = (estimated_tokens / 1_000_000) * PRICE_PER_MILLION
+    is_free_tier_ok = file_count < 100_000  # Generous estimate for free tier
+    
+    return {
+        "file_count": file_count,
+        "size_mb": round(size_bytes / (1024 * 1024), 1),
+        "type_counts": type_counts,
+        "embedding_estimate": {
+            "estimated_tokens": estimated_tokens,
+            "estimated_cost_usd": round(estimated_cost_usd, 2),
+            "free_tier_available": is_free_tier_ok,
+            "free_tier_note": "Gemini offre un tier gratuit avec limites de débit" if is_free_tier_ok else "Volume élevé - tier payant recommandé"
+        }
+    }
 
 
 @router.get("/", response_model=List[ScanOut])
@@ -160,3 +229,47 @@ def cancel_scan(scan_id: int, db: Session = Depends(get_db)):
     db.commit()
     
     return {"status": "cancelled", "scan_id": scan_id}
+
+
+@router.post("/{scan_id}/resume", response_model=ScanOut)
+def resume_scan(scan_id: int, db: Session = Depends(get_db)):
+    """
+    Resume an interrupted or failed scan.
+    
+    Continues processing from where it left off.
+    """
+    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    
+    # Only allow resume for failed, cancelled, or interrupted scans
+    if scan.status not in [ScanStatus.FAILED, ScanStatus.CANCELLED]:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot resume scan with status: {scan.status.value}"
+        )
+    
+    # Reset status to pending
+    scan.status = ScanStatus.PENDING
+    db.commit()
+    
+    # Launch Celery task with resume flag
+    task = run_scan.delay(scan.id, resume=True)
+    
+    # Update with new task ID
+    scan.celery_task_id = task.id
+    scan.status = ScanStatus.RUNNING
+    db.commit()
+    db.refresh(scan)
+    
+    return scan
+
+
+@router.get("/interrupted", response_model=List[ScanOut])
+def list_interrupted_scans(db: Session = Depends(get_db)):
+    """List all scans that can be resumed (failed or cancelled)."""
+    scans = db.query(Scan).filter(
+        Scan.status.in_([ScanStatus.FAILED, ScanStatus.CANCELLED])
+    ).order_by(Scan.created_at.desc()).all()
+    return scans
+

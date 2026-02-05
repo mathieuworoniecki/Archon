@@ -6,6 +6,8 @@ import { ResultList } from '@/components/search/ResultList'
 import { DocumentViewer } from '@/components/viewer/DocumentViewer'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { BrowseFilters } from '@/components/browse/BrowseFilters'
+import { TimelineHeatmap } from '@/components/timeline/TimelineHeatmap'
+import { EntityFilter } from '@/components/entities/EntityFilter'
 import { Button } from '@/components/ui/button'
 import { useSearch } from '@/hooks/useSearch'
 import { useStats } from '@/hooks/useStats'
@@ -114,6 +116,12 @@ export function HomePage() {
                                     disabled={!hasDocuments}
                                 />
                             </div>
+
+                            {/* Timeline Heatmap */}
+                            <TimelineHeatmap className="px-4 py-2 border-b" />
+
+                            {/* Entity Filter */}
+                            <EntityFilter className="px-4 py-2 border-b" />
 
                             {/* Search Results */}
                             <div className="flex-1 overflow-hidden">

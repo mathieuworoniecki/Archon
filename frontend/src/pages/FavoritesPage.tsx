@@ -1,20 +1,28 @@
-import { useState, useCallback } from 'react'
-import { Star, Trash2, Eye, Filter } from 'lucide-react'
+import { useState, useCallback, useEffect } from 'react'
+import { Star, Trash2, Eye, Filter, Sparkles, Edit3, Loader2, X, Check } from 'lucide-react'
 import { useFavorites } from '@/hooks/useFavorites'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { DocumentViewer } from '@/components/viewer/DocumentViewer'
-import { removeFavorite, getTags, Tag } from '@/lib/api'
+import { removeFavorite, getTags, Tag, updateFavorite, API_BASE } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { useEffect } from 'react'
+import { Textarea } from '@/components/ui/textarea'
 
 export function FavoritesPage() {
     const { favorites, total, isLoading, refetch } = useFavorites()
     const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null)
     const [tags, setTags] = useState<Tag[]>([])
     const [selectedTagIds, setSelectedTagIds] = useState<number[]>([])
+    
+    // Notes editing state
+    const [editingNoteId, setEditingNoteId] = useState<number | null>(null)
+    const [editingNoteText, setEditingNoteText] = useState('')
+    
+    // AI Synthesis state
+    const [synthesis, setSynthesis] = useState<string | null>(null)
+    const [isSynthesizing, setIsSynthesizing] = useState(false)
 
     // Fetch tags on mount
     useEffect(() => {
@@ -42,6 +50,42 @@ export function FavoritesPage() {
             return newIds
         })
     }, [refetch])
+
+    const startEditingNote = (documentId: number, currentNote: string | null) => {
+        setEditingNoteId(documentId)
+        setEditingNoteText(currentNote || '')
+    }
+
+    const saveNote = async (documentId: number) => {
+        try {
+            await updateFavorite(documentId, { notes: editingNoteText })
+            refetch(selectedTagIds.length > 0 ? selectedTagIds : undefined)
+            setEditingNoteId(null)
+        } catch (err) {
+            console.error('Failed to save note:', err)
+        }
+    }
+
+    const cancelEditingNote = () => {
+        setEditingNoteId(null)
+        setEditingNoteText('')
+    }
+
+    const generateSynthesis = async () => {
+        setIsSynthesizing(true)
+        try {
+            const response = await fetch(`${API_BASE}/favorites/synthesize`, {
+                method: 'POST'
+            })
+            const data = await response.json()
+            setSynthesis(data.synthesis)
+        } catch (err) {
+            console.error('Failed to generate synthesis:', err)
+            setSynthesis("Erreur lors de la génération de la synthèse. Vérifiez que GEMINI_API_KEY est configurée.")
+        } finally {
+            setIsSynthesizing(false)
+        }
+    }
 
     const getFileTypeIcon = (fileType: string) => {
         switch (fileType) {
@@ -78,6 +122,22 @@ export function FavoritesPage() {
                             <h2 className="font-semibold">Mes Favoris</h2>
                             <Badge variant="secondary">{total}</Badge>
                         </div>
+                        
+                        {/* AI Synthesis Button */}
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={generateSynthesis}
+                            disabled={isSynthesizing || favorites.length === 0}
+                            className="gap-1.5"
+                        >
+                            {isSynthesizing ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                                <Sparkles className="h-4 w-4" />
+                            )}
+                            Synthèse IA
+                        </Button>
                     </div>
 
                     {/* Tag Filters */}
@@ -104,6 +164,29 @@ export function FavoritesPage() {
                         </div>
                     )}
                 </div>
+
+                {/* AI Synthesis Display */}
+                {synthesis && (
+                    <div className="p-3 border-b bg-primary/5">
+                        <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2 text-sm font-medium">
+                                <Sparkles className="h-4 w-4 text-primary" />
+                                Synthèse IA
+                            </div>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0"
+                                onClick={() => setSynthesis(null)}
+                            >
+                                <X className="h-3 w-3" />
+                            </Button>
+                        </div>
+                        <div className="mt-2 text-sm text-muted-foreground whitespace-pre-wrap max-h-48 overflow-auto">
+                            {synthesis}
+                        </div>
+                    </div>
+                )}
 
                 {/* Favorites List */}
                 <ScrollArea className="flex-1">
@@ -163,11 +246,53 @@ export function FavoritesPage() {
                                                     </div>
                                                 )}
 
-                                                {/* Notes */}
-                                                {fav.notes && (
-                                                    <p className="text-xs text-muted-foreground mt-2 italic line-clamp-2">
-                                                        "{fav.notes}"
-                                                    </p>
+                                                {/* Notes - View or Edit */}
+                                                {editingNoteId === fav.document_id ? (
+                                                    <div className="mt-2" onClick={e => e.stopPropagation()}>
+                                                        <Textarea
+                                                            value={editingNoteText}
+                                                            onChange={e => setEditingNoteText(e.target.value)}
+                                                            placeholder="Ajouter une note..."
+                                                            className="text-xs min-h-[60px]"
+                                                        />
+                                                        <div className="flex gap-1 mt-1">
+                                                            <Button
+                                                                size="sm"
+                                                                className="h-6 text-xs"
+                                                                onClick={() => saveNote(fav.document_id)}
+                                                            >
+                                                                <Check className="h-3 w-3 mr-1" />
+                                                                Sauver
+                                                            </Button>
+                                                            <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                className="h-6 text-xs"
+                                                                onClick={cancelEditingNote}
+                                                            >
+                                                                Annuler
+                                                            </Button>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <div 
+                                                        className="mt-2 group/note cursor-text"
+                                                        onClick={e => {
+                                                            e.stopPropagation()
+                                                            startEditingNote(fav.document_id, fav.notes)
+                                                        }}
+                                                    >
+                                                        {fav.notes ? (
+                                                            <p className="text-xs text-muted-foreground italic line-clamp-2 hover:bg-muted/50 rounded p-1 -m-1">
+                                                                "{fav.notes}"
+                                                            </p>
+                                                        ) : (
+                                                            <p className="text-xs text-muted-foreground/50 hover:text-muted-foreground flex items-center gap-1">
+                                                                <Edit3 className="h-3 w-3" />
+                                                                Ajouter une note...
+                                                            </p>
+                                                        )}
+                                                    </div>
                                                 )}
                                             </div>
                                             

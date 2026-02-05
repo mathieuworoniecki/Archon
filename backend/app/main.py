@@ -16,6 +16,11 @@ from .api.documents import router as documents_router
 from .api.stats import router as stats_router
 from .api.favorites import router as favorites_router
 from .api.tags import router as tags_router
+from .api.timeline import router as timeline_router
+from .api.entities import router as entities_router
+from .api.audit import router as audit_router
+from .api.chat import router as chat_router
+from .api.projects import router as projects_router
 from .workers.celery_app import celery_app
 
 settings = get_settings()
@@ -55,6 +60,11 @@ app.include_router(documents_router, prefix="/api")
 app.include_router(stats_router, prefix="/api")
 app.include_router(favorites_router, prefix="/api")
 app.include_router(tags_router, prefix="/api")
+app.include_router(timeline_router, prefix="/api")
+app.include_router(entities_router, prefix="/api")
+app.include_router(audit_router)
+app.include_router(chat_router)
+app.include_router(projects_router)
 
 
 # WebSocket connection manager

@@ -12,11 +12,14 @@ from sqlalchemy.orm import Session
 
 from .celery_app import celery_app
 from ..database import get_db_context
-from ..models import Scan, Document, ScanError, ScanStatus, DocumentType
+from ..models import Scan, Document, ScanError, ScanStatus, DocumentType, Entity
 from ..services.ocr import get_ocr_service, OCRService
 from ..services.meilisearch import get_meilisearch_service
 from ..services.qdrant import get_qdrant_service
 from ..services.embeddings import get_embeddings_service
+from ..services.archive_extractor import get_archive_extractor
+from ..services.ner_service import get_ner_service
+from ..utils.hashing import compute_file_hashes
 from ..config import get_settings
 
 settings = get_settings()
@@ -47,9 +50,10 @@ def log_scan_error(scan_id: int, db: Session, file_path: str, error_type: str, e
 def discover_files(root_path: str, ocr_service: OCRService) -> List[Dict[str, Any]]:
     """
     Discover all processable files in a directory.
+    Extracts archives (ZIP/RAR/7Z/TAR) recursively.
     
     Returns:
-        List of dicts with file info.
+        List of dicts with file info including archive_path for extracted files.
     """
     files = []
     root = Path(root_path)
@@ -57,29 +61,24 @@ def discover_files(root_path: str, ocr_service: OCRService) -> List[Dict[str, An
     if not root.exists():
         raise FileNotFoundError(f"Path does not exist: {root_path}")
     
-    if root.is_file():
-        doc_type = ocr_service.detect_type(str(root))
-        if doc_type != DocumentType.UNKNOWN:
-            files.append({
-                "path": str(root),
-                "type": doc_type
-            })
-    else:
-        # Walk directory recursively
-        for file_path in root.rglob("*"):
-            if file_path.is_file():
-                doc_type = ocr_service.detect_type(str(file_path))
-                if doc_type != DocumentType.UNKNOWN:
-                    files.append({
-                        "path": str(file_path),
-                        "type": doc_type
-                    })
+    # Use archive extractor to handle archives recursively
+    with get_archive_extractor(max_depth=5) as extractor:
+        result = extractor.extract_recursive(root_path)
+        
+        for file_path, archive_path in result.files:
+            doc_type = ocr_service.detect_type(str(file_path))
+            if doc_type != DocumentType.UNKNOWN:
+                files.append({
+                    "path": str(file_path),
+                    "type": doc_type,
+                    "archive_path": archive_path  # e.g., "archive.zip/subdir/"
+                })
     
     return files
 
 
 @celery_app.task(bind=True, name="app.workers.tasks.run_scan")
-def run_scan(self, scan_id: int):
+def run_scan(self, scan_id: int, resume: bool = False):
     """
     Main scan task - orchestrates the multi-pass pipeline.
     
@@ -88,6 +87,11 @@ def run_scan(self, scan_id: int):
     2. Extraction: Extract text (with OCR if needed)
     3. Indexation Meilisearch: Full-text index
     4. Indexation Qdrant: Semantic embeddings
+    5. NER Extraction: Named entities
+    
+    Args:
+        scan_id: ID of the scan to process
+        resume: If True, skip already processed documents
     """
     
     with get_db_context() as db:
@@ -96,9 +100,18 @@ def run_scan(self, scan_id: int):
         if not scan:
             return {"error": f"Scan {scan_id} not found"}
         
+        # Get already processed files if resuming
+        processed_paths = set()
+        if resume:
+            existing_docs = db.query(Document.file_path).filter(
+                Document.scan_id == scan_id
+            ).all()
+            processed_paths = {doc.file_path for doc in existing_docs}
+        
         # Update scan status
         scan.status = ScanStatus.RUNNING
-        scan.started_at = datetime.utcnow()
+        if not resume:
+            scan.started_at = datetime.utcnow()
         scan.celery_task_id = self.request.id
         db.commit()
         
@@ -113,7 +126,14 @@ def run_scan(self, scan_id: int):
             self.update_state(state="PROGRESS", meta={"phase": "detection", "progress": 0})
             
             files = discover_files(scan.path, ocr_service)
-            scan.total_files = len(files)
+            
+            # Filter out already processed files when resuming
+            if resume and processed_paths:
+                files = [f for f in files if f["path"] not in processed_paths]
+                # Update total to remaining
+                scan.total_files = len(files) + len(processed_paths)
+            else:
+                scan.total_files = len(files)
             db.commit()
             
             if not files:
@@ -129,6 +149,7 @@ def run_scan(self, scan_id: int):
             for file_info in files:
                 file_path = file_info["path"]
                 file_type = file_info["type"]
+                archive_path = file_info.get("archive_path")  # May be None
                 
                 try:
                     # Update progress
@@ -162,6 +183,9 @@ def run_scan(self, scan_id: int):
                         db.commit()
                         continue
                     
+                    # === PASS 2.5: COMPUTE HASHES (Chain of Proof) ===
+                    hash_md5, hash_sha256 = compute_file_hashes(file_path)
+                    
                     # Create document record
                     document = Document(
                         scan_id=scan_id,
@@ -172,10 +196,14 @@ def run_scan(self, scan_id: int):
                         text_content=text_content,
                         text_length=len(text_content),
                         has_ocr=1 if used_ocr else 0,
-                        file_modified_at=datetime.fromtimestamp(metadata["file_modified_at"])
+                        file_modified_at=datetime.fromtimestamp(metadata["file_modified_at"]),
+                        archive_path=archive_path,  # Track archive origin
+                        hash_md5=hash_md5,
+                        hash_sha256=hash_sha256
                     )
                     db.add(document)
                     db.flush()  # Get document ID
+
                     
                     # === PASS 3: MEILISEARCH INDEXATION ===
                     meili_result = meili_service.index_document(
@@ -212,6 +240,32 @@ def run_scan(self, scan_id: int):
                             log_scan_error(
                                 scan_id, db, file_path,
                                 "EmbeddingError",
+                                str(e)
+                            )
+                    
+                    # === PASS 5: NER EXTRACTION ===
+                    if text_content:
+                        try:
+                            ner_service = get_ner_service()
+                            extracted_entities = ner_service.extract_entities(
+                                text_content,
+                                include_types=["PER", "ORG", "LOC", "MISC"]
+                            )
+                            
+                            for ent in extracted_entities:
+                                entity = Entity(
+                                    document_id=document.id,
+                                    text=ent["text"][:255],  # Truncate if needed
+                                    type=ent["type"],
+                                    count=ent["count"],
+                                    start_char=ent.get("start_char")
+                                )
+                                db.add(entity)
+                        except Exception as e:
+                            # NER is optional, log but don't fail
+                            log_scan_error(
+                                scan_id, db, file_path,
+                                "NERError",
                                 str(e)
                             )
                     

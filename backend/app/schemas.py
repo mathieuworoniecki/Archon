@@ -14,6 +14,10 @@ from .models import ScanStatus, DocumentType
 class ScanCreate(BaseModel):
     """Schema for creating a new scan."""
     path: str = Field(..., description="Path to the directory to scan")
+    enable_embeddings: bool = Field(
+        default=False, 
+        description="Enable semantic embeddings (requires Gemini API, costs ~0.001$/1000 docs)"
+    )
 
 
 class ScanProgress(BaseModel):
@@ -73,6 +77,7 @@ class DocumentOut(BaseModel):
     has_ocr: bool
     file_modified_at: Optional[datetime]
     indexed_at: datetime
+    archive_path: Optional[str] = None  # Path inside archive if extracted
     
     class Config:
         from_attributes = True
@@ -128,6 +133,7 @@ class SearchResult(BaseModel):
     score: float
     highlights: List[SearchHighlight] = []
     snippet: Optional[str] = None
+    archive_path: Optional[str] = None  # Path inside archive if extracted
     
     # Source tracking
     from_meilisearch: bool = False

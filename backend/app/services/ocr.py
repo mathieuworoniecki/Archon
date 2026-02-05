@@ -24,6 +24,7 @@ class OCRService:
     # Supported file extensions
     PDF_EXTENSIONS = {".pdf"}
     IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif", ".webp"}
+    VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v", ".wmv"}
     TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm", ".log"}
     
     def __init__(self):
@@ -45,6 +46,8 @@ class OCRService:
             return DocumentType.PDF
         elif ext in self.IMAGE_EXTENSIONS:
             return DocumentType.IMAGE
+        elif ext in self.VIDEO_EXTENSIONS:
+            return DocumentType.IMAGE  # Treat videos as images for indexing (will OCR keyframes)
         elif ext in self.TEXT_EXTENSIONS:
             return DocumentType.TEXT
         else:
@@ -57,6 +60,12 @@ class OCRService:
         Returns:
             Tuple of (text_content, used_ocr)
         """
+        ext = Path(file_path).suffix.lower()
+        
+        # Check if it's a video first (special handling)
+        if ext in self.VIDEO_EXTENSIONS:
+            return self._extract_from_video(file_path)
+        
         doc_type = self.detect_type(file_path)
         
         if doc_type == DocumentType.PDF:
@@ -138,6 +147,85 @@ class OCRService:
                 
         except Exception as e:
             raise RuntimeError(f"Failed to read text file: {e}")
+    
+    def _extract_from_video(self, file_path: str) -> Tuple[str, bool]:
+        """
+        Extract text from video by:
+        1. Extracting keyframes every 30 seconds using ffmpeg
+        2. Running OCR on each frame
+        3. Combining all unique text
+        """
+        import subprocess
+        import tempfile
+        import shutil
+        
+        if not self.tesseract_available:
+            return "", False
+        
+        try:
+            # Create temp directory for frames
+            temp_dir = tempfile.mkdtemp(prefix="archon_video_")
+            
+            try:
+                # Extract keyframes every 30 seconds (1 frame per 30 sec)
+                # -vf fps=1/30 means 1 frame every 30 seconds
+                frame_pattern = os.path.join(temp_dir, "frame_%04d.jpg")
+                
+                result = subprocess.run([
+                    'ffmpeg', '-i', file_path,
+                    '-vf', 'fps=1/30,scale=1280:-1',  # 1 frame/30s, resize to 1280px width
+                    '-q:v', '3',  # Good quality JPEG
+                    '-frames:v', '20',  # Max 20 frames (10 min of video)
+                    frame_pattern
+                ], capture_output=True, timeout=120)  # 2 min timeout
+                
+                # Find all extracted frames
+                frames = sorted([f for f in os.listdir(temp_dir) if f.startswith("frame_")])
+                
+                if not frames:
+                    return "", False
+                
+                # OCR each frame
+                all_texts = []
+                seen_texts = set()  # Deduplicate similar texts
+                
+                for frame_file in frames:
+                    frame_path = os.path.join(temp_dir, frame_file)
+                    try:
+                        img = Image.open(frame_path)
+                        if img.mode not in ("RGB", "L"):
+                            img = img.convert("RGB")
+                        
+                        text = pytesseract.image_to_string(img, lang="fra+eng")
+                        text = text.strip()
+                        
+                        # Only keep if there's meaningful text and it's not duplicate
+                        if len(text) > 20:
+                            # Simple deduplication: check if first 100 chars are unique
+                            text_key = text[:100].lower()
+                            if text_key not in seen_texts:
+                                seen_texts.add(text_key)
+                                frame_num = frame_file.replace("frame_", "").replace(".jpg", "")
+                                time_sec = int(frame_num) * 30
+                                time_str = f"{time_sec//60}:{time_sec%60:02d}"
+                                all_texts.append(f"--- Video @{time_str} ---\n{text}")
+                        
+                        img.close()
+                    except Exception:
+                        continue
+                
+                combined_text = "\n\n".join(all_texts)
+                return combined_text, True if combined_text else False
+                
+            finally:
+                # Cleanup temp directory
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                
+        except subprocess.TimeoutExpired:
+            return "", False
+        except Exception as e:
+            # ffmpeg not available or other error
+            return "", False
     
     def get_file_metadata(self, file_path: str) -> dict:
         """Get file metadata."""

@@ -1,4 +1,4 @@
-import { FileText, Image, FileCode, File, Database, Brain, ChevronRight } from 'lucide-react'
+import { FileText, Image, FileCode, File, Database, Brain, ChevronRight, Archive } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { SearchResult } from '@/lib/api'
@@ -67,6 +67,14 @@ export function ResultCard({ result, isSelected, onClick }: ResultCardProps) {
                     <Badge variant="outline" className="text-xs">
                         {result.file_type.toUpperCase()}
                     </Badge>
+
+                    {/* Archive indicator */}
+                    {result.archive_path && (
+                        <Badge variant="outline" className="text-xs gap-1 text-orange-400 border-orange-400/50">
+                            <Archive className="h-3 w-3" />
+                            {result.archive_path.split('/')[0]}
+                        </Badge>
+                    )}
 
                     {/* Source indicators */}
                     {result.from_meilisearch && (

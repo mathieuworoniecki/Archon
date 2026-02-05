@@ -234,3 +234,104 @@ def delete_document(document_id: int, db: Session = Depends(get_db)):
     db.commit()
     
     return {"status": "deleted", "document_id": document_id}
+
+
+@router.get("/{document_id}/thumbnail")
+def get_document_thumbnail(
+    document_id: int,
+    size: int = Query(150, ge=50, le=500),
+    db: Session = Depends(get_db)
+):
+    """
+    Get a thumbnail for images and videos.
+    
+    For images: Returns a resized JPEG thumbnail.
+    For videos: Returns first frame as thumbnail (if ffmpeg available).
+    Uses caching for fast repeated access.
+    """
+    import hashlib
+    from io import BytesIO
+    
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    file_path = Path(document.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+    
+    ext = file_path.suffix.lower()
+    
+    # Cache directory
+    cache_dir = Path("/tmp/archon_thumbnails")
+    cache_dir.mkdir(exist_ok=True)
+    
+    # Cache key based on file path, modification time, and size
+    cache_key = hashlib.md5(f"{document.file_path}:{document.file_modified_at}:{size}".encode()).hexdigest()
+    cache_path = cache_dir / f"{cache_key}.jpg"
+    
+    # Return cached thumbnail if exists
+    if cache_path.exists():
+        return FileResponse(
+            path=str(cache_path),
+            media_type="image/jpeg"
+        )
+    
+    # Generate thumbnail for images
+    image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
+    video_exts = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
+    
+    if ext in image_exts:
+        try:
+            from PIL import Image
+            
+            with Image.open(file_path) as img:
+                # Convert to RGB (for PNG with transparency, CMYK, etc.)
+                if img.mode in ('RGBA', 'P', 'CMYK'):
+                    img = img.convert('RGB')
+                
+                # Create thumbnail maintaining aspect ratio
+                img.thumbnail((size, size), Image.Resampling.LANCZOS)
+                
+                # Save to cache
+                img.save(cache_path, 'JPEG', quality=80, optimize=True)
+            
+            return FileResponse(
+                path=str(cache_path),
+                media_type="image/jpeg"
+            )
+        except Exception as e:
+            # Fallback to original file
+            return FileResponse(
+                path=str(file_path),
+                media_type="image/jpeg"
+            )
+    
+    elif ext in video_exts:
+        # Try to extract first frame with ffmpeg
+        try:
+            import subprocess
+            result = subprocess.run([
+                'ffmpeg', '-i', str(file_path),
+                '-vf', f'scale={size}:-1',
+                '-frames:v', '1',
+                '-y', str(cache_path)
+            ], capture_output=True, timeout=10)
+            
+            if cache_path.exists():
+                return FileResponse(
+                    path=str(cache_path),
+                    media_type="image/jpeg"
+                )
+        except Exception:
+            pass
+        
+        # Return placeholder for videos without thumbnail
+        return Response(
+            content=b'',
+            media_type="image/jpeg",
+            status_code=204
+        )
+    
+    # Not a media file
+    raise HTTPException(status_code=400, detail="Not a media file")

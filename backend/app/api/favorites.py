@@ -11,6 +11,7 @@ from ..schemas import (
     FavoriteCreate, FavoriteOut, FavoriteUpdate, 
     FavoriteListResponse, TagOut
 )
+from ..services.ai_chat import get_chat_service
 
 router = APIRouter(prefix="/favorites", tags=["favorites"])
 
@@ -208,3 +209,58 @@ def check_favorite_status(
         "is_favorite": favorite is not None,
         "favorite_id": favorite.id if favorite else None
     }
+
+
+@router.post("/synthesize")
+async def synthesize_favorites(
+    db: Session = Depends(get_db)
+):
+    """Generate an AI synthesis of all favorited documents."""
+    favorites = db.query(Favorite).options(
+        joinedload(Favorite.document)
+    ).all()
+    
+    if not favorites:
+        return {"synthesis": "Aucun favori à synthétiser.", "document_count": 0}
+    
+    # Build context from favorites
+    documents_context = []
+    for fav in favorites:
+        doc = fav.document
+        if doc:
+            doc_info = f"**{doc.file_name}** ({doc.file_type})"
+            if fav.notes:
+                doc_info += f"\n  Notes: {fav.notes}"
+            if doc.content_text:
+                # Truncate content to avoid overwhelming the model
+                content_preview = doc.content_text[:2000]
+                if len(doc.content_text) > 2000:
+                    content_preview += "..."
+                doc_info += f"\n  Contenu: {content_preview}"
+            documents_context.append(doc_info)
+    
+    # Create synthesis prompt
+    prompt = f"""Voici les {len(favorites)} documents marqués comme favoris dans cette investigation:
+
+{chr(10).join(documents_context)}
+
+Génère une synthèse concise de ces documents:
+1. Points clés et informations importantes trouvées
+2. Connexions ou liens entre les documents
+3. Questions ou pistes à explorer
+
+Sois factuel et précis."""
+
+    try:
+        chat_service = get_chat_service()
+        response = await chat_service.chat(message=prompt, use_rag=False)
+        return {
+            "synthesis": response.get("response", "Erreur de génération"),
+            "document_count": len(favorites)
+        }
+    except Exception as e:
+        return {
+            "synthesis": f"Erreur lors de la synthèse: {str(e)}",
+            "document_count": len(favorites),
+            "error": True
+        }

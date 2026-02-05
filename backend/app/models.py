@@ -44,6 +44,9 @@ class Scan(Base):
     processed_files = Column(Integer, default=0)
     failed_files = Column(Integer, default=0)
     
+    # Embedding option
+    enable_embeddings = Column(Integer, default=0)  # 0 = disabled, 1 = enabled
+    
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
@@ -83,8 +86,33 @@ class Document(Base):
     file_modified_at = Column(DateTime, nullable=True)
     indexed_at = Column(DateTime, default=datetime.utcnow)
     
+    # Archive info (if extracted from an archive)
+    archive_path = Column(String(1024), nullable=True)  # e.g., "archive.zip/subdir/"
+    
+    # Chain of Proof - cryptographic hashes
+    hash_md5 = Column(String(32), nullable=True, index=True)
+    hash_sha256 = Column(String(64), nullable=True, index=True)
+    
     # Relationships
     scan = relationship("Scan", back_populates="documents")
+    entities = relationship("Entity", back_populates="document", cascade="all, delete-orphan")
+
+
+class Entity(Base):
+    """Named entity extracted from documents."""
+    __tablename__ = "entities"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    
+    # Entity info
+    text = Column(String(255), nullable=False, index=True)  # "Jean Dupont"
+    type = Column(String(50), nullable=False, index=True)   # PER, ORG, LOC, MISC
+    count = Column(Integer, default=1)  # Occurrences in document
+    start_char = Column(Integer, nullable=True)  # First occurrence position
+    
+    # Relationships
+    document = relationship("Document", back_populates="entities")
 
 
 class ScanError(Base):
@@ -137,4 +165,34 @@ class FavoriteTag(Base):
     
     favorite_id = Column(Integer, ForeignKey("favorites.id", ondelete="CASCADE"), primary_key=True)
     tag_id = Column(Integer, ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
+
+
+class AuditAction(str, Enum):
+    """Types of audit actions."""
+    SCAN_STARTED = "scan_started"
+    SCAN_COMPLETED = "scan_completed"
+    DOCUMENT_INDEXED = "document_indexed"
+    DOCUMENT_DELETED = "document_deleted"
+    DOCUMENT_VIEWED = "document_viewed"
+    SEARCH_PERFORMED = "search_performed"
+    EXPORT_CREATED = "export_created"
+
+
+class AuditLog(Base):
+    """Audit log for chain of proof / traceability."""
+    __tablename__ = "audit_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    action = Column(SQLEnum(AuditAction), nullable=False, index=True)
+    
+    # Context
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    scan_id = Column(Integer, ForeignKey("scans.id", ondelete="SET NULL"), nullable=True)
+    
+    # Details
+    details = Column(Text, nullable=True)  # JSON with additional info
+    user_ip = Column(String(45), nullable=True)  # IPv6 compatible
+    
+    # Timestamp
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 

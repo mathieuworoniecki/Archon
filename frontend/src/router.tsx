@@ -1,5 +1,5 @@
 import { createBrowserRouter, RouterProvider, Outlet, Link, useLocation } from 'react-router-dom'
-import { Shield, Github, Activity, FileText, Search, Star, Scan } from 'lucide-react'
+import { Shield, Github, Activity, FileText, Search, Star, Scan, LayoutDashboard, Sparkles, Calendar, Image as ImageIcon } from 'lucide-react'
 import { ScanModal } from '@/components/scan/ScanModal'
 import { Button } from '@/components/ui/button'
 import { useStats } from '@/hooks/useStats'
@@ -8,6 +8,10 @@ import { useStats } from '@/hooks/useStats'
 import { HomePage } from '@/pages/HomePage'
 import { FavoritesPage } from '@/pages/FavoritesPage'
 import { ScansPage } from '@/pages/ScansPage'
+import { CockpitPage } from '@/pages/CockpitPage'
+import { ChatPage } from '@/pages/ChatPage'
+import { TimelinePage } from '@/pages/TimelinePage'
+import { GalleryPage } from '@/pages/GalleryPage'
 
 // Layout component with header and footer
 function RootLayout() {
@@ -27,6 +31,10 @@ function RootLayout() {
 
     const navItems = [
         { path: '/', label: 'Recherche', icon: Search },
+        { path: '/cockpit', label: 'Cockpit', icon: LayoutDashboard },
+        { path: '/timeline', label: 'Timeline', icon: Calendar },
+        { path: '/chat', label: 'IA', icon: Sparkles },
+        { path: '/gallery', label: 'Galerie', icon: ImageIcon },
         { path: '/favorites', label: 'Favoris', icon: Star },
         { path: '/scans', label: 'Scans', icon: Scan },
     ]
@@ -125,8 +133,24 @@ export const router = createBrowserRouter([
                 element: <FavoritesPage />,
             },
             {
+                path: 'cockpit',
+                element: <CockpitPage />,
+            },
+            {
                 path: 'scans',
                 element: <ScansPage />,
+            },
+            {
+                path: 'chat',
+                element: <ChatPage />,
+            },
+            {
+                path: 'timeline',
+                element: <TimelinePage />,
+            },
+            {
+                path: 'gallery',
+                element: <GalleryPage />,
             },
         ],
     },

@@ -1,4 +1,4 @@
-const API_BASE = '/api'
+export const API_BASE = '/api'
 
 export interface Scan {
     id: number
@@ -43,6 +43,7 @@ export interface Document {
     has_ocr: boolean
     file_modified_at: string | null
     indexed_at: string
+    archive_path?: string | null  // Path inside archive if extracted
 }
 
 export interface SearchResult {
@@ -56,6 +57,7 @@ export interface SearchResult {
     meilisearch_rank: number | null
     qdrant_rank: number | null
     snippet: string | null
+    archive_path?: string | null  // Path inside archive if extracted
     highlights: Array<{
         field: string
         snippet: string
@@ -96,11 +98,37 @@ export interface Stats {
 }
 
 // API Functions
-export async function createScan(path: string): Promise<Scan> {
+
+export interface ScanEstimate {
+    file_count: number
+    size_mb: number
+    type_counts: {
+        pdf: number
+        image: number
+        text: number
+        video: number
+    }
+    embedding_estimate: {
+        estimated_tokens: number
+        estimated_cost_usd: number
+        free_tier_available: boolean
+        free_tier_note: string
+    }
+}
+
+export async function estimateScan(path: string): Promise<ScanEstimate> {
+    const response = await fetch(`${API_BASE}/scan/estimate?path=${encodeURIComponent(path)}`, {
+        method: 'POST',
+    })
+    if (!response.ok) throw new Error('Failed to estimate scan')
+    return response.json()
+}
+
+export async function createScan(path: string, enableEmbeddings: boolean = false): Promise<Scan> {
     const response = await fetch(`${API_BASE}/scan/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path })
+        body: JSON.stringify({ path, enable_embeddings: enableEmbeddings })
     })
     if (!response.ok) throw new Error('Failed to create scan')
     return response.json()
@@ -129,6 +157,14 @@ export async function cancelScan(scanId: number): Promise<void> {
         method: 'POST'
     })
     if (!response.ok) throw new Error('Failed to cancel scan')
+}
+
+export async function resumeScan(scanId: number): Promise<Scan> {
+    const response = await fetch(`${API_BASE}/scan/${scanId}/resume`, {
+        method: 'POST'
+    })
+    if (!response.ok) throw new Error('Failed to resume scan')
+    return response.json()
 }
 
 export async function deleteScan(scanId: number): Promise<void> {

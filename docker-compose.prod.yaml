@@ -1,0 +1,271 @@
+# Docker Compose Production - Optimized for large-scale scanning (100k+ documents)
+# Usage: docker compose -f docker-compose.prod.yaml up -d
+
+services:
+  # =============================================================================
+  # FRONTEND - React + Vite served by Nginx
+  # =============================================================================
+  frontend:
+    build: ./frontend
+    container_name: archon-frontend
+    ports:
+      - "3100:80"
+    depends_on:
+      - backend
+    networks:
+      - archon_network
+    restart: unless-stopped
+
+  # =============================================================================
+  # BACKEND - FastAPI Application
+  # =============================================================================
+  backend:
+    build: ./backend
+    container_name: archon-backend
+    ports:
+      - "8100:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - MEILISEARCH_URL=http://meilisearch:7700
+      - MEILISEARCH_API_KEY=archon_meili_master_key_2024
+      - QDRANT_URL=http://qdrant:6333
+      - DATABASE_URL=postgresql://archon:archon_secure_pwd@postgres:5432/archon
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - TESSERACT_CMD=/usr/bin/tesseract
+    volumes:
+      - backend_data:/app/data
+      - ${DOCUMENTS_PATH:-./documents}:/documents:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - archon_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # =============================================================================
+  # CELERY WORKERS - 4 parallel workers for heavy processing
+  # =============================================================================
+  celery-worker-1:
+    build: ./backend
+    container_name: archon-worker-1
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -n worker1@%h -Q default,ocr
+    environment: &celery_env
+      - REDIS_URL=redis://redis:6379/0
+      - MEILISEARCH_URL=http://meilisearch:7700
+      - MEILISEARCH_API_KEY=archon_meili_master_key_2024
+      - QDRANT_URL=http://qdrant:6333
+      - DATABASE_URL=postgresql://archon:archon_secure_pwd@postgres:5432/archon
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - TESSERACT_CMD=/usr/bin/tesseract
+    volumes: &celery_volumes
+      - backend_data:/app/data
+      - ${DOCUMENTS_PATH:-./documents}:/documents:ro
+    depends_on: &celery_depends
+      postgres:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - archon_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+  celery-worker-2:
+    build: ./backend
+    container_name: archon-worker-2
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -n worker2@%h -Q default,indexing
+    environment: *celery_env
+    volumes: *celery_volumes
+    depends_on: *celery_depends
+    networks:
+      - archon_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+  celery-worker-3:
+    build: ./backend
+    container_name: archon-worker-3
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -n worker3@%h -Q default,ner
+    environment: *celery_env
+    volumes: *celery_volumes
+    depends_on: *celery_depends
+    networks:
+      - archon_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+  celery-worker-4:
+    build: ./backend
+    container_name: archon-worker-4
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -n worker4@%h -Q default
+    environment: *celery_env
+    volumes: *celery_volumes
+    depends_on: *celery_depends
+    networks:
+      - archon_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+  # =============================================================================
+  # FLOWER - Celery Monitoring Dashboard
+  # =============================================================================
+  flower:
+    build: ./backend
+    container_name: archon-flower
+    command: celery -A app.workers.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://archon:archon_secure_pwd@postgres:5432/archon
+    depends_on:
+      - redis
+    networks:
+      - archon_network
+    restart: unless-stopped
+
+  # =============================================================================
+  # POSTGRESQL - Production Database
+  # =============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: archon-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=archon
+      - POSTGRES_PASSWORD=archon_secure_pwd
+      - POSTGRES_DB=archon
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U archon -d archon"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - archon_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # =============================================================================
+  # MEILISEARCH - Full-text search engine
+  # =============================================================================
+  meilisearch:
+    image: getmeili/meilisearch:v1.6
+    container_name: archon-meilisearch
+    ports:
+      - "7701:7700"
+    volumes:
+      - meilisearch_data:/meili_data
+    environment:
+      - MEILI_ENV=production
+      - MEILI_MASTER_KEY=archon_meili_master_key_2024
+      - MEILI_NO_ANALYTICS=true
+      - MEILI_MAX_INDEXING_MEMORY=8Gb
+      - MEILI_MAX_INDEXING_THREADS=8
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - archon_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+
+  # =============================================================================
+  # QDRANT - Vector database for semantic search
+  # =============================================================================
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: archon-qdrant
+    ports:
+      - "6335:6333"
+      - "6336:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__STORAGE__PERFORMANCE__MAX_OPTIMIZATION_THREADS=8
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - archon_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+
+  # =============================================================================
+  # REDIS - Message broker for Celery
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: archon-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - archon_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    name: archon_postgres_data
+  meilisearch_data:
+    name: archon_meilisearch_data
+  qdrant_data:
+    name: archon_qdrant_data
+  redis_data:
+    name: archon_redis_data
+  backend_data:
+    name: archon_backend_data
+
+networks:
+  archon_network:
+    name: archon_network
