@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, FileText, Image as
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { getDocumentFileUrl, getDocument } from '@/lib/api'
+import { FavoriteButton } from '@/components/favorites/FavoriteButton'
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`
@@ -91,6 +92,7 @@ export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps)
                     </div>
 
                     <div className="flex items-center gap-2">
+                        <FavoriteButton documentId={documentId} size="sm" />
                         <Button
                             variant="outline"
                             size="icon"
@@ -151,6 +153,7 @@ export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps)
                         <span className="text-sm font-medium">{docInfo.file_name}</span>
                     </div>
                     <div className="flex items-center gap-2">
+                        <FavoriteButton documentId={documentId} size="sm" />
                         <Button
                             variant="outline"
                             size="icon"
@@ -190,6 +193,7 @@ export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps)
                     <FileCode className="h-4 w-4" />
                     <span className="text-sm font-medium">{docInfo?.file_name}</span>
                 </div>
+                <FavoriteButton documentId={documentId} size="sm" />
             </div>
             <ScrollArea className="flex-1">
                 <pre

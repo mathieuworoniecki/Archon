@@ -3,6 +3,7 @@ import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { SearchResult } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { FavoriteButton } from '@/components/favorites/FavoriteButton'
 
 interface ResultCardProps {
     result: SearchResult
@@ -27,7 +28,7 @@ export function ResultCard({ result, isSelected, onClick }: ResultCardProps) {
     return (
         <Card
             className={cn(
-                'p-4 cursor-pointer transition-all hover:border-primary/50',
+                'group p-4 cursor-pointer transition-all hover:border-primary/50',
                 isSelected && 'border-primary bg-primary/5 ring-1 ring-primary'
             )}
             onClick={onClick}
@@ -39,10 +40,18 @@ export function ResultCard({ result, isSelected, onClick }: ResultCardProps) {
                         {getFileIcon(result.file_type)}
                         <span className="font-medium truncate">{result.file_name}</span>
                     </div>
-                    <ChevronRight className={cn(
-                        'h-4 w-4 text-muted-foreground shrink-0 transition-transform',
-                        isSelected && 'text-primary rotate-90'
-                    )} />
+                    <div className="flex items-center gap-1 shrink-0">
+                        <FavoriteButton 
+                            documentId={result.document_id} 
+                            size="sm" 
+                            variant="ghost"
+                            className="opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7 p-0"
+                        />
+                        <ChevronRight className={cn(
+                            'h-4 w-4 text-muted-foreground transition-transform',
+                            isSelected && 'text-primary rotate-90'
+                        )} />
+                    </div>
                 </div>
 
                 {/* Snippet with highlighting */}
