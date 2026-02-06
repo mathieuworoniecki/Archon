@@ -2,7 +2,7 @@
 War Room Backend - Scan API Routes
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from celery.result import AsyncResult
 
@@ -22,7 +22,6 @@ def create_scan(scan_in: ScanCreate, db: Session = Depends(get_db)):
     
     The scan runs in the background via Celery.
     """
-    import os
     from pathlib import Path
     
     # Validate path exists
@@ -99,7 +98,7 @@ def estimate_scan(path: str):
                     try:
                         file_path = os.path.join(root, filename)
                         size_bytes += os.path.getsize(file_path)
-                    except:
+                    except OSError:
                         pass
                     
                     if ext == '.pdf':
@@ -130,7 +129,7 @@ def estimate_scan(path: str):
                     remaining_dirs += 1
                     if remaining_dirs > 100000:  # Cap directory count
                         break
-            except:
+            except OSError:
                 remaining_dirs = total_dirs * 10  # Fallback estimate
             
             # Extrapolate based on directory ratio
@@ -146,8 +145,8 @@ def estimate_scan(path: str):
                 file_count = estimated_total
                 size_bytes = estimated_size
     
-    except Exception as e:
-        # Return what we have
+    except OSError:
+        # Return what we have on filesystem errors
         pass
     
     # Estimate tokens and costs
