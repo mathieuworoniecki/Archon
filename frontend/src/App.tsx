@@ -24,8 +24,8 @@ function App() {
     const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null)
     const [selectedDocument, setSelectedDocument] = useState<Document | null>(null)
 
-    const handleSearch = useCallback((query: string, semanticWeight: number) => {
-        performSearch(query, { semantic_weight: semanticWeight })
+    const handleSearch = useCallback((query: string, semanticWeight: number, projectPath?: string) => {
+        performSearch(query, { semantic_weight: semanticWeight, project_path: projectPath })
         setSelectedResult(null)
     }, [performSearch])
 

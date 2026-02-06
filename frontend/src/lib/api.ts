@@ -180,6 +180,7 @@ export async function search(query: string, options?: {
     file_types?: string[]
     scan_ids?: number[]
     semantic_weight?: number
+    project_path?: string
 }): Promise<SearchResponse> {
     const response = await fetch(`${API_BASE}/search/`, {
         method: 'POST',
@@ -190,7 +191,8 @@ export async function search(query: string, options?: {
             offset: options?.offset ?? 0,
             file_types: options?.file_types,
             scan_ids: options?.scan_ids,
-            semantic_weight: options?.semantic_weight ?? 0.5
+            semantic_weight: options?.semantic_weight ?? 0.5,
+            project_path: options?.project_path
         })
     })
     if (!response.ok) throw new Error('Search failed')

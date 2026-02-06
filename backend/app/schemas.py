@@ -110,6 +110,7 @@ class SearchQuery(BaseModel):
     # Filters
     file_types: Optional[List[DocumentType]] = None
     scan_ids: Optional[List[int]] = None
+    project_path: Optional[str] = Field(None, description="Filter by project path prefix")
     date_from: Optional[datetime] = None
     date_to: Optional[datetime] = None
     

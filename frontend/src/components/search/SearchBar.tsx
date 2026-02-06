@@ -1,11 +1,25 @@
-import { useState, FormEvent } from 'react'
-import { Search, Sparkles, Zap, Loader2 } from 'lucide-react'
+import { useState, useEffect, FormEvent } from 'react'
+import { Search, Sparkles, Zap, Loader2, FolderOpen } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { API_BASE } from '@/lib/api'
+
+interface Project {
+    name: string
+    path: string
+    file_count: number
+}
 
 interface SearchBarProps {
-    onSearch: (query: string, semanticWeight: number) => void
+    onSearch: (query: string, semanticWeight: number, projectPath?: string) => void
     isLoading?: boolean
     disabled?: boolean
 }
@@ -13,11 +27,22 @@ interface SearchBarProps {
 export function SearchBar({ onSearch, isLoading, disabled }: SearchBarProps) {
     const [query, setQuery] = useState('')
     const [semanticWeight, setSemanticWeight] = useState(0.5)
+    const [projects, setProjects] = useState<Project[]>([])
+    const [selectedProject, setSelectedProject] = useState<string>('__all__')
+
+    // Fetch projects on mount
+    useEffect(() => {
+        fetch(`${API_BASE}/projects/`)
+            .then(res => res.json())
+            .then(data => setProjects(data.projects || []))
+            .catch(console.error)
+    }, [])
 
     const handleSubmit = (e: FormEvent) => {
         e.preventDefault()
         if (query.trim()) {
-            onSearch(query, semanticWeight)
+            const projectPath = selectedProject !== '__all__' ? selectedProject : undefined
+            onSearch(query, semanticWeight, projectPath)
         }
     }
 
@@ -30,6 +55,24 @@ export function SearchBar({ onSearch, isLoading, disabled }: SearchBarProps) {
     return (
         <div className="space-y-3">
             <form onSubmit={handleSubmit} className="flex gap-2">
+                {/* Project Selector */}
+                {projects.length > 0 && (
+                    <Select value={selectedProject} onValueChange={setSelectedProject}>
+                        <SelectTrigger className="w-48 h-12">
+                            <FolderOpen className="h-4 w-4 mr-2 text-muted-foreground" />
+                            <SelectValue placeholder="Tous les projets" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="__all__">Tous les projets</SelectItem>
+                            {projects.map(p => (
+                                <SelectItem key={p.path} value={p.path}>
+                                    {p.name} ({p.file_count})
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                )}
+
                 <div className="relative flex-1">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
@@ -79,3 +122,4 @@ export function SearchBar({ onSearch, isLoading, disabled }: SearchBarProps) {
         </div>
     )
 }
+

@@ -140,7 +140,8 @@ async def hybrid_search(
                 limit=query.limit * 2,  # Get more for fusion
                 offset=0,
                 file_types=file_types,
-                scan_ids=scan_ids
+                scan_ids=scan_ids,
+                project_path=query.project_path
             )
             meilisearch_results = meili_response.get("hits", [])
         except Exception as e:

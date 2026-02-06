@@ -7,6 +7,7 @@ export interface SearchOptions {
     file_types?: string[]
     scan_ids?: number[]
     semantic_weight?: number
+    project_path?: string
 }
 
 export function useSearch() {

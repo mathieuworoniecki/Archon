@@ -31,7 +31,7 @@ class MeilisearchService:
         index = self.client.index(self.index_name)
         index.update_settings({
             "searchableAttributes": ["text_content", "file_name", "file_path"],
-            "filterableAttributes": ["file_type", "scan_id", "file_modified_at"],
+            "filterableAttributes": ["file_type", "scan_id", "file_modified_at", "file_path"],
             "sortableAttributes": ["file_modified_at", "indexed_at", "file_size"],
             "displayedAttributes": ["*"],
         })
@@ -71,6 +71,7 @@ class MeilisearchService:
         offset: int = 0,
         file_types: Optional[List[str]] = None,
         scan_ids: Optional[List[int]] = None,
+        project_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Search documents in Meilisearch with highlighting.
@@ -88,6 +89,9 @@ class MeilisearchService:
         if scan_ids:
             scan_filter = " OR ".join([f"scan_id = {s}" for s in scan_ids])
             filters.append(f"({scan_filter})")
+        if project_path:
+            # Use starts-with filter for project path
+            filters.append(f'file_path STARTS WITH "{project_path}"')
         
         search_params = {
             "limit": limit,
