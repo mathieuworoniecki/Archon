@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Star, Trash2, Eye, Filter, Sparkles, Edit3, Loader2, X, Check } from 'lucide-react'
+import { Star, Trash2, Eye, Filter, Sparkles, Edit3, Loader2, X, Check, Tags, Plus } from 'lucide-react'
 import { useFavorites } from '@/hooks/useFavorites'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -9,6 +9,12 @@ import { DocumentViewer } from '@/components/viewer/DocumentViewer'
 import { removeFavorite, getTags, Tag, updateFavorite, API_BASE } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Textarea } from '@/components/ui/textarea'
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from '@/components/ui/popover'
+import { Checkbox } from '@/components/ui/checkbox'
 
 export function FavoritesPage() {
     const { favorites, total, isLoading, refetch } = useFavorites()
@@ -69,6 +75,21 @@ export function FavoritesPage() {
     const cancelEditingNote = () => {
         setEditingNoteId(null)
         setEditingNoteText('')
+    }
+
+    const toggleFavoriteTag = async (documentId: number, tagId: number, currentTags: Tag[]) => {
+        const currentTagIds = currentTags.map(t => t.id)
+        const hasTag = currentTagIds.includes(tagId)
+        const newTagIds = hasTag
+            ? currentTagIds.filter(id => id !== tagId)
+            : [...currentTagIds, tagId]
+        
+        try {
+            await updateFavorite(documentId, { tag_ids: newTagIds })
+            refetch(selectedTagIds.length > 0 ? selectedTagIds : undefined)
+        } catch (err) {
+            console.error('Failed to update tags:', err)
+        }
     }
 
     const generateSynthesis = async () => {
@@ -231,20 +252,65 @@ export function FavoritesPage() {
                                                 </div>
                                                 
                                                 {/* Tags */}
-                                                {fav.tags && fav.tags.length > 0 && (
-                                                    <div className="flex flex-wrap gap-1 mt-2">
-                                                        {fav.tags.map(tag => (
-                                                            <Badge
-                                                                key={tag.id}
-                                                                variant="outline"
-                                                                className="text-xs px-1.5 py-0"
-                                                                style={{ borderColor: tag.color, color: tag.color }}
+                                                <div className="flex flex-wrap items-center gap-1 mt-2">
+                                                    {fav.tags && fav.tags.map(tag => (
+                                                        <Badge
+                                                            key={tag.id}
+                                                            variant="outline"
+                                                            className="text-xs px-1.5 py-0"
+                                                            style={{ borderColor: tag.color, color: tag.color }}
+                                                        >
+                                                            {tag.name}
+                                                        </Badge>
+                                                    ))}
+                                                    
+                                                    {/* Add/Edit Tags Button */}
+                                                    <Popover>
+                                                        <PopoverTrigger asChild>
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                className="h-5 w-5 p-0 opacity-50 hover:opacity-100"
+                                                                onClick={e => e.stopPropagation()}
                                                             >
-                                                                {tag.name}
-                                                            </Badge>
-                                                        ))}
-                                                    </div>
-                                                )}
+                                                                <Plus className="h-3 w-3" />
+                                                            </Button>
+                                                        </PopoverTrigger>
+                                                        <PopoverContent 
+                                                            className="w-48 p-2" 
+                                                            align="start"
+                                                            onClick={e => e.stopPropagation()}
+                                                        >
+                                                            <div className="flex items-center gap-2 mb-2 pb-2 border-b">
+                                                                <Tags className="h-4 w-4" />
+                                                                <span className="text-sm font-medium">Étiquettes</span>
+                                                            </div>
+                                                            {tags.length === 0 ? (
+                                                                <p className="text-xs text-muted-foreground">Aucune étiquette</p>
+                                                            ) : (
+                                                                <div className="space-y-1">
+                                                                    {tags.map(tag => {
+                                                                        const isSelected = fav.tags?.some(t => t.id === tag.id)
+                                                                        return (
+                                                                            <div
+                                                                                key={tag.id}
+                                                                                className="flex items-center gap-2 p-1 rounded hover:bg-accent cursor-pointer"
+                                                                                onClick={() => toggleFavoriteTag(fav.document_id, tag.id, fav.tags || [])}
+                                                                            >
+                                                                                <Checkbox checked={isSelected} />
+                                                                                <div
+                                                                                    className="w-3 h-3 rounded-full"
+                                                                                    style={{ backgroundColor: tag.color }}
+                                                                                />
+                                                                                <span className="text-sm">{tag.name}</span>
+                                                                            </div>
+                                                                        )
+                                                                    })}
+                                                                </div>
+                                                            )}
+                                                        </PopoverContent>
+                                                    </Popover>
+                                                </div>
 
                                                 {/* Notes - View or Edit */}
                                                 {editingNoteId === fav.document_id ? (
