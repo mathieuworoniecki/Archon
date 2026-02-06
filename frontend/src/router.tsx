@@ -1,6 +1,5 @@
 import { createBrowserRouter, RouterProvider, Outlet, Link, useLocation } from 'react-router-dom'
-import { Shield, Github, Activity, FileText, Search, Star, Scan, LayoutDashboard, Sparkles, Calendar, Image as ImageIcon } from 'lucide-react'
-import { ScanModal } from '@/components/scan/ScanModal'
+import { Shield, Github, Activity, FileText, Search, Star, Scan, LayoutDashboard, Sparkles, Calendar, Image as ImageIcon, FolderSearch } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useStats } from '@/hooks/useStats'
 
@@ -15,7 +14,7 @@ import { GalleryPage } from '@/pages/GalleryPage'
 
 // Layout component with header and footer
 function RootLayout() {
-    const { stats, hasDocuments, refetch: refetchStats } = useStats()
+    const { stats, hasDocuments } = useStats()
     const location = useLocation()
 
     const formatDocumentCount = (count: number): string => {
@@ -23,10 +22,6 @@ function RootLayout() {
             return `${(count / 1000).toFixed(1)}k`
         }
         return count.toString()
-    }
-
-    const handleScanComplete = () => {
-        refetchStats()
     }
 
     const navItems = [
@@ -85,7 +80,12 @@ function RootLayout() {
                             </div>
                         )}
 
-                        <ScanModal onScanComplete={handleScanComplete} />
+                        <Link to="/scans">
+                            <Button variant="outline" size="sm" className="gap-2">
+                                <FolderSearch className="h-4 w-4" />
+                                Scanner
+                            </Button>
+                        </Link>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <Activity className="h-3 w-3 text-green-500" />
                             <span>Connecté</span>

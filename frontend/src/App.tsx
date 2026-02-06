@@ -1,10 +1,10 @@
 import { useState, useCallback } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
-import { Shield, Github, Activity, FileText, Search, FolderOpen } from 'lucide-react'
+import { Shield, Github, Activity, FileText, Search, FolderOpen, FolderSearch } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { SearchBar } from '@/components/search/SearchBar'
 import { ResultList } from '@/components/search/ResultList'
 import { DocumentViewer } from '@/components/viewer/DocumentViewer'
-import { ScanModal } from '@/components/scan/ScanModal'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { BrowseFilters } from '@/components/browse/BrowseFilters'
 import { Button } from '@/components/ui/button'
@@ -17,7 +17,7 @@ type ViewMode = 'search' | 'browse'
 
 function App() {
     const { results, totalResults, processingTime, isLoading, lastQuery, performSearch } = useSearch()
-    const { stats, isLoading: statsLoading, hasDocuments, refetch: refetchStats } = useStats()
+    const { stats, isLoading: statsLoading, hasDocuments } = useStats()
     const browse = useBrowse()
 
     const [viewMode, setViewMode] = useState<ViewMode>('search')
@@ -38,11 +38,6 @@ function App() {
         setSelectedDocument(doc)
         setSelectedResult(null)
     }, [])
-
-    const handleScanComplete = useCallback(() => {
-        refetchStats()
-        browse.refetch()
-    }, [refetchStats, browse])
 
     const handleStartScan = useCallback(() => {
         const scanButton = document.querySelector('[data-scan-trigger]') as HTMLButtonElement
@@ -124,7 +119,12 @@ function App() {
                             </div>
                         )}
 
-                        <ScanModal onScanComplete={handleScanComplete} />
+                        <Link to="/scans">
+                            <Button variant="outline" size="sm" className="gap-2">
+                                <FolderSearch className="h-4 w-4" />
+                                Scanner
+                            </Button>
+                        </Link>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <Activity className="h-3 w-3 text-green-500" />
                             <span>Connecté</span>

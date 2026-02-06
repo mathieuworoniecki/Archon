@@ -32,29 +32,71 @@ class ProjectsResponse(BaseModel):
     total_projects: int
 
 
-def get_directory_stats(path: Path) -> tuple[int, int, int, Optional[datetime]]:
+def get_directory_stats(path: Path, max_files: int = 1000, max_seconds: float = 2.0) -> tuple[int, int, int, Optional[datetime]]:
     """
     Get stats for a directory: file_count, total_size, subdir_count, last_modified.
+    Uses sampling for large directories to avoid timeouts.
     """
+    import time
+    
     file_count = 0
     total_size = 0
     subdir_count = 0
     last_modified = None
+    start_time = time.time()
+    sampled = False
+    dirs_seen = 0
     
     try:
-        for item in path.rglob("*"):
-            if item.is_file():
+        # Count immediate subdirectories first (fast)
+        for item in path.iterdir():
+            if item.is_dir() and not item.name.startswith('.'):
+                subdir_count += 1
+        
+        # Walk for file stats with limits
+        for root, dirs, files in os.walk(path):
+            dirs_seen += 1
+            
+            # Check timeout
+            if time.time() - start_time > max_seconds:
+                sampled = True
+                break
+            
+            for name in files:
+                file_path = Path(root) / name
                 file_count += 1
+                
                 try:
-                    stat = item.stat()
+                    stat = file_path.stat()
                     total_size += stat.st_size
                     mod_time = datetime.fromtimestamp(stat.st_mtime)
                     if last_modified is None or mod_time > last_modified:
                         last_modified = mod_time
                 except (OSError, PermissionError):
                     pass
-            elif item.is_dir() and item.parent == path:
-                subdir_count += 1
+                
+                # Check file limit
+                if file_count >= max_files:
+                    sampled = True
+                    break
+            
+            if sampled:
+                break
+        
+        # Extrapolate if sampled
+        if sampled and file_count > 0:
+            # Quick directory count estimate
+            try:
+                total_dirs = sum(1 for _ in os.walk(path))
+                if dirs_seen > 0 and total_dirs > dirs_seen:
+                    ratio = total_dirs / dirs_seen
+                    file_count = int(file_count * ratio)
+                    total_size = int(total_size * ratio)
+            except (OSError, PermissionError):
+                # Fallback: just multiply by 10 if we can't count
+                file_count = file_count * 10
+                total_size = total_size * 10
+                
     except (OSError, PermissionError):
         pass
     

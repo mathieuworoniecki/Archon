@@ -23,6 +23,15 @@ import { useScanProgress } from '@/hooks/useScanProgress'
 import { createScan, estimateScan, ScanEstimate } from '@/lib/api'
 
 
+interface Project {
+    name: string
+    path: string
+    file_count: number
+    total_size_bytes: number
+    subdirectories: number
+}
+
+
 interface ScanRecord {
     id: number
     path: string
@@ -65,13 +74,48 @@ export function ScansPage() {
     const [estimate, setEstimate] = useState<ScanEstimate | null>(null)
     const [isEstimating, setIsEstimating] = useState(false)
     const [estimateError, setEstimateError] = useState<string | null>(null)
+    
+    // Projects
+    const [projects, setProjects] = useState<Project[]>([])
+    const [selectedProject, setSelectedProject] = useState<string>('')
+    const [isLoadingProjects, setIsLoadingProjects] = useState(true)
 
     const { progress, isComplete } = useScanProgress(activeScanId)
 
-    // Fetch scans on mount
+    // Fetch scans and projects on mount
     useEffect(() => {
         fetchScans()
+        fetchProjects()
     }, [])
+    
+    const fetchProjects = async () => {
+        setIsLoadingProjects(true)
+        try {
+            const response = await fetch('/api/projects/')
+            if (response.ok) {
+                const data = await response.json()
+                setProjects(data.projects || [])
+            }
+        } catch (err) {
+            console.error('Failed to fetch projects:', err)
+        } finally {
+            setIsLoadingProjects(false)
+        }
+    }
+    
+    const handleProjectChange = (projectName: string) => {
+        setSelectedProject(projectName)
+        if (projectName === '__all__') {
+            setPath('/documents')
+        } else if (projectName) {
+            const project = projects.find(p => p.name === projectName)
+            if (project) {
+                setPath(project.path)
+            }
+        } else {
+            setPath('/documents')
+        }
+    }
     
     // Fetch estimate when path changes
     useEffect(() => {
@@ -217,6 +261,39 @@ export function ScansPage() {
                                 </CardTitle>
                             </CardHeader>
                             <CardContent className="space-y-4">
+                                {/* Project Selector */}
+                                <div className="space-y-2">
+                                    <Label>Projet</Label>
+                                    {isLoadingProjects ? (
+                                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                            Chargement des projets...
+                                        </div>
+                                    ) : projects.length === 0 ? (
+                                        <div className="text-sm text-muted-foreground">
+                                            Aucun projet trouvé dans /documents
+                                        </div>
+                                    ) : (
+                                        <Select value={selectedProject} onValueChange={handleProjectChange}>
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="Sélectionner un projet..." />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="__all__">📁 Tous les dossiers</SelectItem>
+                                                {projects.map(project => (
+                                                    <SelectItem key={project.name} value={project.name}>
+                                                        <div className="flex items-center gap-2">
+                                                            <FolderSearch className="h-4 w-4" />
+                                                            <span>{project.name}</span>
+                                                            <span className="text-xs text-muted-foreground">({formatNumber(project.file_count)} fichiers)</span>
+                                                        </div>
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    )}
+                                </div>
+                                
                                 {/* Path Input */}
                                 <div className="space-y-2">
                                     <Label>Chemin du dossier</Label>

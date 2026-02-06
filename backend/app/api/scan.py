@@ -55,61 +55,115 @@ def create_scan(scan_in: ScanCreate, db: Session = Depends(get_db)):
 def estimate_scan(path: str):
     """
     Estimate scan costs and file count before launching.
-    Returns file count and embedding cost estimation.
+    Uses sampling for large directories to avoid timeouts.
     """
     from pathlib import Path
     import os
+    import time
     
     target_path = Path(path)
     if not target_path.exists():
         raise HTTPException(status_code=400, detail=f"Path does not exist: {path}")
     
-    # Count files
+    # Count files with limits
     supported_extensions = {
         '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp',
         '.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.log',
         '.mp4', '.webm', '.mov', '.avi', '.mkv'
     }
     
+    MAX_FILES_TO_SCAN = 10000  # Sample first 10K files
+    MAX_TIME_SECONDS = 10  # Max 10 seconds
+    
     file_count = 0
     size_bytes = 0
     type_counts = {"pdf": 0, "image": 0, "text": 0, "video": 0}
+    dirs_scanned = 0
+    total_dirs = 0
+    sampled = False
+    start_time = time.time()
     
-    for root, _, files in os.walk(target_path):
-        for filename in files:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext in supported_extensions:
-                file_count += 1
-                try:
-                    file_path = os.path.join(root, filename)
-                    size_bytes += os.path.getsize(file_path)
-                except:
-                    pass
+    try:
+        for root, dirs, files in os.walk(target_path):
+            total_dirs += 1
+            
+            # Check timeout
+            if time.time() - start_time > MAX_TIME_SECONDS:
+                sampled = True
+                break
+            
+            for filename in files:
+                ext = os.path.splitext(filename)[1].lower()
+                if ext in supported_extensions:
+                    file_count += 1
+                    try:
+                        file_path = os.path.join(root, filename)
+                        size_bytes += os.path.getsize(file_path)
+                    except:
+                        pass
+                    
+                    if ext == '.pdf':
+                        type_counts["pdf"] += 1
+                    elif ext in {'.mp4', '.webm', '.mov', '.avi', '.mkv'}:
+                        type_counts["video"] += 1
+                    elif ext in {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp'}:
+                        type_counts["image"] += 1
+                    else:
+                        type_counts["text"] += 1
+                    
+                    # Check limit
+                    if file_count >= MAX_FILES_TO_SCAN:
+                        # Estimate total by directory density
+                        dirs_scanned = total_dirs
+                        sampled = True
+                        break
+            
+            if sampled:
+                break
+        
+        # If sampled, try to estimate total
+        if sampled and file_count > 0:
+            # Count remaining directories quickly
+            remaining_dirs = 0
+            try:
+                for _ in os.walk(target_path):
+                    remaining_dirs += 1
+                    if remaining_dirs > 100000:  # Cap directory count
+                        break
+            except:
+                remaining_dirs = total_dirs * 10  # Fallback estimate
+            
+            # Extrapolate based on directory ratio
+            if dirs_scanned > 0:
+                ratio = remaining_dirs / dirs_scanned
+                estimated_total = int(file_count * ratio)
+                estimated_size = int(size_bytes * ratio)
                 
-                if ext == '.pdf':
-                    type_counts["pdf"] += 1
-                elif ext in {'.mp4', '.webm', '.mov', '.avi', '.mkv'}:
-                    type_counts["video"] += 1
-                elif ext in {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp'}:
-                    type_counts["image"] += 1
-                else:
-                    type_counts["text"] += 1
+                # Scale type counts
+                for key in type_counts:
+                    type_counts[key] = int(type_counts[key] * ratio)
+                
+                file_count = estimated_total
+                size_bytes = estimated_size
+    
+    except Exception as e:
+        # Return what we have
+        pass
     
     # Estimate tokens and costs
-    # Average ~500 tokens per document for embeddings
     estimated_tokens = file_count * 500
     
     # Gemini embedding pricing
     PRICE_PER_MILLION = 0.15  # USD
-    FREE_TIER_LIMIT = 1500  # requests per minute (approximate daily limit ~2M requests)
     
     estimated_cost_usd = (estimated_tokens / 1_000_000) * PRICE_PER_MILLION
-    is_free_tier_ok = file_count < 100_000  # Generous estimate for free tier
+    is_free_tier_ok = file_count < 100_000
     
     return {
         "file_count": file_count,
         "size_mb": round(size_bytes / (1024 * 1024), 1),
         "type_counts": type_counts,
+        "sampled": sampled,
         "embedding_estimate": {
             "estimated_tokens": estimated_tokens,
             "estimated_cost_usd": round(estimated_cost_usd, 2),
