@@ -34,9 +34,43 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
     init_db()
+    _recover_orphaned_scans()
     yield
     # Shutdown
     pass
+
+
+def _recover_orphaned_scans():
+    """Mark orphaned RUNNING/PENDING scans as FAILED on startup.
+    
+    After a container restart, Celery tasks are gone but scan status
+    stays RUNNING in the DB. This makes them resumable.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    from .database import SessionLocal
+    from .models import Scan, ScanStatus
+    
+    db = SessionLocal()
+    try:
+        orphaned = db.query(Scan).filter(
+            Scan.status.in_([ScanStatus.RUNNING, ScanStatus.PENDING])
+        ).all()
+        
+        for scan in orphaned:
+            scan.status = ScanStatus.FAILED
+            scan.error_message = "Interrompu par redémarrage du serveur"
+            logger.warning(f"Recovered orphaned scan {scan.id} (was {scan.status.value})")
+        
+        if orphaned:
+            db.commit()
+            logger.info(f"Recovered {len(orphaned)} orphaned scan(s)")
+    except Exception as e:
+        logger.error(f"Failed to recover orphaned scans: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
 
 
 # Create FastAPI app
