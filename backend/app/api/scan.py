@@ -320,8 +320,6 @@ async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db)):
     async def event_generator():
         """Generate SSE events for scan progress."""
         stream_start = time.time()
-        last_processed = 0
-        speed_samples = []  # Rolling window for smoother speed calc
         
         try:
             while True:
@@ -401,31 +399,16 @@ async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db)):
                     # Compute speed — true average from elapsed time
                     current_processed = scan.processed_files
                     
-                    # Primary metric: true average speed = total processed / total time
+                    # True average speed = total processed / total time
+                    avg_speed = 0.0
                     if total_elapsed > 0 and current_processed > 0:
                         avg_speed = current_processed / total_elapsed
                         progress_data["files_per_second"] = round(avg_speed, 1)
                     
-                    # For ETA: use EWMA-smoothed instantaneous speed (more responsive)
-                    if current_processed > last_processed and total_elapsed > 0:
-                        delta = current_processed - last_processed
-                        instant_speed = delta / 1.5  # per polling interval
-                        if speed_samples:
-                            # Exponential weighted moving average (α=0.3)
-                            smoothed = 0.3 * instant_speed + 0.7 * speed_samples[-1]
-                        else:
-                            smoothed = instant_speed
-                        speed_samples.append(smoothed)
-                        if len(speed_samples) > 10:
-                            speed_samples.pop(0)
-                    last_processed = current_processed
-                    
-                    # ETA from smoothed speed (more responsive to current throughput)
+                    # ETA from true average speed (consistent with displayed speed)
                     remaining = scan.total_files - current_processed
-                    if speed_samples and remaining > 0:
-                        eta_speed = speed_samples[-1]
-                        if eta_speed > 0:
-                            progress_data["eta_seconds"] = int(remaining / eta_speed)
+                    if avg_speed > 0 and remaining > 0:
+                        progress_data["eta_seconds"] = int(remaining / avg_speed)
                     
                     # Send SSE event
                     yield f"event: progress\ndata: {json.dumps(progress_data)}\n\n"
