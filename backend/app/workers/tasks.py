@@ -1,11 +1,11 @@
 """
-War Room Backend - Celery Tasks
+Archon Backend - Celery Tasks
 Multi-pass document processing pipeline
 """
 import os
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from celery import current_task
 from sqlalchemy.orm import Session
@@ -47,38 +47,59 @@ def log_scan_error(scan_id: int, db: Session, file_path: str, error_type: str, e
     db.commit()
 
 
-def discover_files(root_path: str, ocr_service: OCRService) -> List[Dict[str, Any]]:
+def discover_files_streaming(root_path: str, ocr_service: OCRService, progress_callback=None) -> List[Dict[str, Any]]:
     """
-    Discover all processable files in a directory.
-    Extracts archives (ZIP/RAR/7Z/TAR) recursively.
+    Discover all processable files in a directory with STREAMING progress updates.
+    Reports progress during enumeration for real-time UI feedback.
+    
+    Args:
+        root_path: Directory to scan
+        ocr_service: OCR service for type detection
+        progress_callback: Optional callback(discovered_count) called every 1000 files
     
     Returns:
-        List of dicts with file info including archive_path for extracted files.
+        List of dicts with file info.
     """
     files = []
     root = Path(root_path)
+    discovered_count = 0
     
     if not root.exists():
         raise FileNotFoundError(f"Path does not exist: {root_path}")
     
-    # Use archive extractor to handle archives recursively
-    with get_archive_extractor(max_depth=5) as extractor:
-        result = extractor.extract_recursive(root_path)
+    # Fast streaming discovery with os.walk (no archive extraction for speed)
+    for dirpath, dirnames, filenames in os.walk(root_path):
+        # Skip hidden directories
+        dirnames[:] = [d for d in dirnames if not d.startswith('.')]
         
-        for file_path, archive_path in result.files:
-            doc_type = ocr_service.detect_type(str(file_path))
+        for filename in filenames:
+            if filename.startswith('.'):
+                continue
+                
+            file_path = os.path.join(dirpath, filename)
+            doc_type = ocr_service.detect_type(file_path)
+            
             if doc_type != DocumentType.UNKNOWN:
                 files.append({
-                    "path": str(file_path),
+                    "path": file_path,
                     "type": doc_type,
-                    "archive_path": archive_path  # e.g., "archive.zip/subdir/"
+                    "archive_path": None
                 })
+                discovered_count += 1
+                
+                # Report progress every 1000 files
+                if progress_callback and discovered_count % 1000 == 0:
+                    progress_callback(discovered_count)
+    
+    # Final callback
+    if progress_callback:
+        progress_callback(discovered_count)
     
     return files
 
 
 @celery_app.task(bind=True, name="app.workers.tasks.run_scan")
-def run_scan(self, scan_id: int, resume: bool = False):
+def run_scan(self, scan_id: int, resume: bool = False, enable_embeddings: bool = False):
     """
     Main scan task - orchestrates the multi-pass pipeline.
     
@@ -111,7 +132,7 @@ def run_scan(self, scan_id: int, resume: bool = False):
         # Update scan status
         scan.status = ScanStatus.RUNNING
         if not resume:
-            scan.started_at = datetime.utcnow()
+            scan.started_at = datetime.now(timezone.utc)
         scan.celery_task_id = self.request.id
         db.commit()
         
@@ -122,10 +143,28 @@ def run_scan(self, scan_id: int, resume: bool = False):
             qdrant_service = get_qdrant_service()
             embeddings_service = get_embeddings_service()
             
-            # === PASS 1: DETECTION ===
+            # Redis for real-time progress publishing
+            import redis
+            redis_client = redis.Redis.from_url(settings.redis_url)
+            
+            # === PASS 1: DETECTION (with streaming progress) ===
             self.update_state(state="PROGRESS", meta={"phase": "detection", "progress": 0})
             
-            files = discover_files(scan.path, ocr_service)
+            def on_discovery_progress(discovered_count: int):
+                """Callback to publish discovery progress to Redis SSE channel."""
+                # Update scan in DB periodically
+                scan.total_files = discovered_count
+                db.commit()
+                
+                # Publish to Redis for SSE streaming
+                redis_client.publish(f"scan:{scan_id}:progress", json.dumps({
+                    "phase": "detection",
+                    "discovered": discovered_count,
+                    "progress": 0,
+                    "status": "discovering"
+                }))
+            
+            files = discover_files_streaming(scan.path, ocr_service, on_discovery_progress)
             
             # Filter out already processed files when resuming
             if resume and processed_paths:
@@ -138,38 +177,80 @@ def run_scan(self, scan_id: int, resume: bool = False):
             
             if not files:
                 scan.status = ScanStatus.COMPLETED
-                scan.completed_at = datetime.utcnow()
+                scan.completed_at = datetime.now(timezone.utc)
                 db.commit()
                 return {"status": "completed", "total_files": 0}
             
-            processed = 0
+            # On resume, offset counters with already-processed docs
+            processed = len(processed_paths) if resume else 0
             failed = 0
+            skipped = 0
+            recent_files = []  # Rolling buffer of last 5 files
+            type_counts = {}   # {"pdf": 0, "image": 0, ...}
+            skipped_details = []  # Rolling buffer of last 10 skipped files
+            recent_errors = []    # Rolling buffer of last 10 errors
             
             # Process each file
             for file_info in files:
                 file_path = file_info["path"]
                 file_type = file_info["type"]
                 archive_path = file_info.get("archive_path")  # May be None
+                file_type_str = file_type.value if hasattr(file_type, 'value') else str(file_type)
                 
                 try:
-                    # Update progress
-                    progress = (processed / len(files)) * 100
+                    # Update progress with enriched metadata
+                    effective_processed = processed - (len(processed_paths) if resume else 0)
+                    progress = (effective_processed / len(files)) * 100 if len(files) > 0 else 0
                     self.update_state(
                         state="PROGRESS",
                         meta={
                             "phase": "processing",
                             "progress": progress,
                             "current_file": Path(file_path).name,
+                            "current_file_type": file_type_str,
                             "processed": processed,
-                            "total": len(files)
+                            "total": scan.total_files,
+                            "recent_files": list(recent_files),
+                            "skipped": skipped,
+                            "type_counts": dict(type_counts),
+                            "skipped_details": list(skipped_details),
+                            "recent_errors": list(recent_errors)
                         }
                     )
+                    
+                    # === INCREMENTAL INDEXING: skip unchanged files ===
+                    try:
+                        early_md5, early_sha256 = compute_file_hashes(file_path)
+                        existing_doc = db.query(Document).filter(
+                            Document.hash_sha256 == early_sha256,
+                            Document.file_path == file_path
+                        ).first()
+                        if existing_doc:
+                            skipped += 1
+                            processed += 1
+                            scan.processed_files = processed
+                            type_counts[file_type_str] = type_counts.get(file_type_str, 0) + 1
+                            skipped_details.append({
+                                "file": Path(file_path).name,
+                                "reason": "Fichier inchangé (hash identique)"
+                            })
+                            if len(skipped_details) > 10:
+                                skipped_details.pop(0)
+                            db.commit()
+                            continue  # File unchanged, skip
+                    except Exception:
+                        early_md5, early_sha256 = None, None
                     
                     # Get file metadata
                     metadata = ocr_service.get_file_metadata(file_path)
                     
                     # === PASS 2: EXTRACTION ===
-                    text_content, used_ocr = ocr_service.extract_text(file_path)
+                    # Lazy Video OCR: defer expensive video OCR until accessed
+                    if file_type == DocumentType.VIDEO:
+                        text_content = "[VIDEO] OCR déféré — sera extrait à l'accès"
+                        used_ocr = False
+                    else:
+                        text_content, used_ocr = ocr_service.extract_text(file_path)
                     
                     if not text_content or not text_content.strip():
                         # Log as warning but continue
@@ -180,11 +261,22 @@ def run_scan(self, scan_id: int, resume: bool = False):
                         )
                         failed += 1
                         scan.failed_files = failed
+                        recent_errors.append({
+                            "file": Path(file_path).name,
+                            "type": "EmptyContent",
+                            "message": "Aucun contenu texte extrait"
+                        })
+                        if len(recent_errors) > 10:
+                            recent_errors.pop(0)
                         db.commit()
                         continue
                     
                     # === PASS 2.5: COMPUTE HASHES (Chain of Proof) ===
-                    hash_md5, hash_sha256 = compute_file_hashes(file_path)
+                    # Reuse hashes from incremental check if available
+                    if early_sha256 is None:
+                        hash_md5, hash_sha256 = compute_file_hashes(file_path)
+                    else:
+                        hash_md5, hash_sha256 = early_md5, early_sha256
                     
                     # Create document record
                     document = Document(
@@ -219,7 +311,7 @@ def run_scan(self, scan_id: int, resume: bool = False):
                     document.meilisearch_id = str(document.id)
                     
                     # === PASS 4: QDRANT VECTORIZATION ===
-                    if text_content and settings.gemini_api_key:
+                    if enable_embeddings and text_content and settings.gemini_api_key:
                         try:
                             # Chunk and embed
                             chunks_with_embeddings = embeddings_service.process_document(text_content)
@@ -272,6 +364,11 @@ def run_scan(self, scan_id: int, resume: bool = False):
                     db.commit()
                     processed += 1
                     scan.processed_files = processed
+                    type_counts[file_type_str] = type_counts.get(file_type_str, 0) + 1
+                    # Update recent files rolling buffer
+                    recent_files.append(Path(file_path).name)
+                    if len(recent_files) > 5:
+                        recent_files.pop(0)
                     db.commit()
                     
                 except Exception as e:
@@ -283,11 +380,18 @@ def run_scan(self, scan_id: int, resume: bool = False):
                     )
                     failed += 1
                     scan.failed_files = failed
+                    recent_errors.append({
+                        "file": Path(file_path).name,
+                        "type": type(e).__name__,
+                        "message": str(e)[:200]
+                    })
+                    if len(recent_errors) > 10:
+                        recent_errors.pop(0)
                     db.commit()
             
             # Update final status
             scan.status = ScanStatus.COMPLETED
-            scan.completed_at = datetime.utcnow()
+            scan.completed_at = datetime.now(timezone.utc)
             db.commit()
             
             return {
@@ -301,7 +405,7 @@ def run_scan(self, scan_id: int, resume: bool = False):
             # Fatal error - mark scan as failed
             scan.status = ScanStatus.FAILED
             scan.error_message = str(e)
-            scan.completed_at = datetime.utcnow()
+            scan.completed_at = datetime.now(timezone.utc)
             db.commit()
             
             raise

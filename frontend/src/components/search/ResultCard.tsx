@@ -1,3 +1,4 @@
+import { useState, useRef, useCallback } from 'react'
 import { FileText, Image, FileCode, File, Database, Brain, ChevronRight, Archive } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -9,9 +10,14 @@ interface ResultCardProps {
     result: SearchResult
     isSelected: boolean
     onClick: () => void
+    className?: string
 }
 
-export function ResultCard({ result, isSelected, onClick }: ResultCardProps) {
+export function ResultCard({ result, isSelected, onClick, className }: ResultCardProps) {
+    const [showPreview, setShowPreview] = useState(false)
+    const [previewPos, setPreviewPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+    const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
     const getFileIcon = (type: string) => {
         switch (type) {
             case 'pdf':
@@ -25,13 +31,29 @@ export function ResultCard({ result, isSelected, onClick }: ResultCardProps) {
         }
     }
 
+    const isImage = result.file_type === 'image'
+
+    const handleMouseEnter = useCallback((e: React.MouseEvent) => {
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+        setPreviewPos({ x: rect.right + 12, y: rect.top })
+        timeoutRef.current = setTimeout(() => setShowPreview(true), 350)
+    }, [])
+
+    const handleMouseLeave = useCallback(() => {
+        if (timeoutRef.current) clearTimeout(timeoutRef.current)
+        setShowPreview(false)
+    }, [])
+
     return (
         <Card
             className={cn(
-                'group p-4 cursor-pointer transition-all hover:border-primary/50',
-                isSelected && 'border-primary bg-primary/5 ring-1 ring-primary'
+                'group p-4 cursor-pointer transition-all hover:border-primary/50 relative',
+                isSelected && 'border-primary bg-primary/5 ring-1 ring-primary',
+                className
             )}
             onClick={onClick}
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
         >
             <div className="space-y-2">
                 {/* Header */}
@@ -96,6 +118,51 @@ export function ResultCard({ result, isSelected, onClick }: ResultCardProps) {
                     </span>
                 </div>
             </div>
+
+            {/* Hover Preview Tooltip */}
+            {showPreview && (
+                <div
+                    className="fixed z-50 pointer-events-none animate-in fade-in-0 zoom-in-95 duration-150"
+                    style={{
+                        left: Math.min(previewPos.x, window.innerWidth - 320),
+                        top: Math.min(previewPos.y, window.innerHeight - 260),
+                    }}
+                >
+                    <div className="w-72 rounded-xl border border-[rgba(255,255,255,0.08)] bg-[rgba(22,27,34,0.95)] backdrop-blur-xl shadow-2xl overflow-hidden">
+                        {isImage ? (
+                            <div className="p-2">
+                                <img
+                                    src={`/api/documents/${result.document_id}/thumbnail`}
+                                    alt={result.file_name}
+                                    className="w-full h-40 object-cover rounded-lg bg-muted"
+                                    onError={(e) => {
+                                        (e.target as HTMLImageElement).style.display = 'none'
+                                    }}
+                                />
+                                <div className="mt-2 px-1 text-xs text-muted-foreground truncate">
+                                    {result.file_name}
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="p-3 space-y-2">
+                                <div className="flex items-center gap-2">
+                                    {getFileIcon(result.file_type)}
+                                    <span className="text-sm font-medium truncate">{result.file_name}</span>
+                                </div>
+                                {result.snippet && (
+                                    <div
+                                        className="text-xs text-muted-foreground line-clamp-6 leading-relaxed"
+                                        dangerouslySetInnerHTML={{ __html: result.snippet }}
+                                    />
+                                )}
+                                <div className="text-[10px] text-muted-foreground/60 truncate">
+                                    {result.file_path}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </Card>
     )
 }

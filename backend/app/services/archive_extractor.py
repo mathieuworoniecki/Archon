@@ -1,5 +1,5 @@
 """
-War Room Backend - Archive Extraction Service
+Archon Backend - Archive Extraction Service
 Supports recursive extraction of ZIP, RAR, and 7Z archives
 """
 import os
@@ -33,6 +33,9 @@ class ArchiveExtractor:
     - RAR files (via rarfile - requires unrar binary)
     - 7Z files (via py7zr)
     - TAR/TGZ/TBZ2 files (via tarfile)
+    
+    Includes zip bomb protection: tracks cumulative decompressed size
+    and aborts if it exceeds max_size_mb.
     """
     
     def __init__(self, max_depth: int = 5, max_size_mb: int = 500):
@@ -45,7 +48,23 @@ class ArchiveExtractor:
         """
         self.max_depth = max_depth
         self.max_size_mb = max_size_mb
+        self._max_size_bytes = max_size_mb * 1024 * 1024
+        self._total_extracted_bytes = 0
         self._temp_dirs: List[Path] = []
+    
+    def _check_size_limit(self, additional_bytes: int, archive_name: str) -> bool:
+        """Check if extracting additional bytes would exceed the limit."""
+        if self._total_extracted_bytes + additional_bytes > self._max_size_bytes:
+            logger.warning(
+                "Zip bomb protection: archive %s would exceed %d MB limit "
+                "(current: %d MB, attempted: %d MB). Aborting extraction.",
+                archive_name,
+                self.max_size_mb,
+                self._total_extracted_bytes // (1024 * 1024),
+                additional_bytes // (1024 * 1024)
+            )
+            return False
+        return True
     
     def is_archive(self, path: str | Path) -> bool:
         """Check if a file is a supported archive."""
@@ -67,22 +86,43 @@ class ArchiveExtractor:
         return temp_dir
     
     def _extract_zip(self, archive_path: Path, dest_dir: Path) -> bool:
-        """Extract ZIP archive."""
+        """Extract ZIP archive with zip bomb protection."""
         import zipfile
         try:
             with zipfile.ZipFile(archive_path, 'r') as zf:
-                zf.extractall(dest_dir)
+                # Pre-check total decompressed size
+                total_uncompressed = sum(info.file_size for info in zf.infolist())
+                if not self._check_size_limit(total_uncompressed, archive_path.name):
+                    return False
+                
+                # Extract file by file, tracking size
+                for info in zf.infolist():
+                    if info.file_size > self._max_size_bytes:
+                        logger.warning("Skipping oversized file in ZIP: %s (%d MB)",
+                                       info.filename, info.file_size // (1024 * 1024))
+                        continue
+                    # Security: skip path traversal attempts
+                    if info.filename.startswith('/') or '..' in info.filename:
+                        logger.warning("Skipping suspicious path in ZIP: %s", info.filename)
+                        continue
+                    zf.extract(info, dest_dir)
+                    self._total_extracted_bytes += info.file_size
+                    
             return True
         except zipfile.BadZipFile as e:
             logger.warning(f"Bad ZIP file {archive_path}: {e}")
             return False
     
     def _extract_rar(self, archive_path: Path, dest_dir: Path) -> bool:
-        """Extract RAR archive."""
+        """Extract RAR archive with size protection."""
         try:
             import rarfile
             with rarfile.RarFile(archive_path, 'r') as rf:
+                total_uncompressed = sum(info.file_size for info in rf.infolist())
+                if not self._check_size_limit(total_uncompressed, archive_path.name):
+                    return False
                 rf.extractall(dest_dir)
+                self._total_extracted_bytes += total_uncompressed
             return True
         except ImportError:
             logger.warning("rarfile not installed, skipping RAR extraction")
@@ -92,11 +132,18 @@ class ArchiveExtractor:
             return False
     
     def _extract_7z(self, archive_path: Path, dest_dir: Path) -> bool:
-        """Extract 7Z archive."""
+        """Extract 7Z archive with size protection."""
         try:
             import py7zr
             with py7zr.SevenZipFile(archive_path, 'r') as sz:
+                # Estimate decompressed size from archive metadata
+                total_uncompressed = sum(
+                    entry.uncompressed for entry in sz.list() if hasattr(entry, 'uncompressed')
+                )
+                if total_uncompressed and not self._check_size_limit(total_uncompressed, archive_path.name):
+                    return False
                 sz.extractall(dest_dir)
+                self._total_extracted_bytes += total_uncompressed or 0
             return True
         except ImportError:
             logger.warning("py7zr not installed, skipping 7Z extraction")
@@ -106,16 +153,23 @@ class ArchiveExtractor:
             return False
     
     def _extract_tar(self, archive_path: Path, dest_dir: Path) -> bool:
-        """Extract TAR/TGZ/TBZ2 archive."""
+        """Extract TAR/TGZ/TBZ2 archive with size and path traversal protection."""
         import tarfile
         try:
             with tarfile.open(archive_path, 'r:*') as tf:
-                # Security: avoid path traversal
+                # Pre-check total size
+                total_uncompressed = sum(m.size for m in tf.getmembers() if m.isfile())
+                if not self._check_size_limit(total_uncompressed, archive_path.name):
+                    return False
+                
                 for member in tf.getmembers():
+                    # Security: avoid path traversal
                     if member.name.startswith('/') or '..' in member.name:
                         logger.warning(f"Skipping suspicious path in tar: {member.name}")
                         continue
                     tf.extract(member, dest_dir)
+                    if member.isfile():
+                        self._total_extracted_bytes += member.size
             return True
         except tarfile.TarError as e:
             logger.warning(f"Failed to extract TAR {archive_path}: {e}")

@@ -2,9 +2,14 @@
 AI Chat Service with RAG (Retrieval-Augmented Generation)
 Uses Gemini Flash for generation and semantic search for context retrieval.
 """
+import logging
+import threading
+import time as _time
 import google.generativeai as genai
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 from ..config import get_settings
 from .qdrant import get_qdrant_service
@@ -18,7 +23,7 @@ class ChatMessage:
     def __init__(self, role: str, content: str, timestamp: Optional[datetime] = None):
         self.role = role  # "user" or "assistant"
         self.content = content
-        self.timestamp = timestamp or datetime.utcnow()
+        self.timestamp = timestamp or datetime.now(timezone.utc)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -51,7 +56,8 @@ class AIChatService:
     Retrieves relevant document context before answering questions.
     """
     
-    SYSTEM_PROMPT = """Tu es un assistant d'investigation numérique expert. Tu aides les enquêteurs à analyser des documents et à trouver des informations pertinentes.
+    SYSTEM_PROMPTS = {
+        "fr": """Tu es un assistant d'investigation numérique expert. Tu aides les enquêteurs à analyser des documents et à trouver des informations pertinentes.
 
 Règles importantes:
 1. Base TOUJOURS tes réponses sur les documents fournis comme contexte
@@ -61,7 +67,22 @@ Règles importantes:
 5. Réponds en français
 6. Si on te demande de résumer, sois concis mais complet
 
-Format de citation: [Document: nom_du_fichier]"""
+Format de citation: [Document: nom_du_fichier]""",
+        "en": """You are an expert digital investigation assistant. You help investigators analyze documents and find relevant information.
+
+Important rules:
+1. ALWAYS base your answers on the documents provided as context
+2. If you don't have enough information in the context, say so clearly
+3. Cite source documents when you mention specific information
+4. Be precise and factual, avoid speculation
+5. Answer in English
+6. If asked to summarize, be concise but comprehensive
+
+Citation format: [Document: file_name]"""
+    }
+
+    def _get_system_prompt(self, locale: str = "fr") -> str:
+        return self.SYSTEM_PROMPTS.get(locale, self.SYSTEM_PROMPTS["fr"])
 
     def __init__(self):
         genai.configure(api_key=settings.gemini_api_key)
@@ -95,7 +116,7 @@ Format de citation: [Document: nom_du_fichier]"""
             
             return contexts
         except Exception as e:
-            print(f"Context retrieval error: {e}")
+            logger.error("Context retrieval error: %s", e)
             return []
     
     def _build_context_prompt(self, contexts: List[DocumentContext]) -> str:
@@ -152,7 +173,7 @@ Format de citation: [Document: nom_du_fichier]"""
             contexts = self._retrieve_context(message, limit=context_limit)
         
         # Build the full prompt
-        prompt_parts = [self.SYSTEM_PROMPT, ""]
+        prompt_parts = [self._get_system_prompt(), ""]
         
         if include_history and len(self.conversation_history) > 1:
             prompt_parts.append(self._build_conversation_context())
@@ -185,12 +206,85 @@ Format de citation: [Document: nom_du_fichier]"""
             "message_count": len(self.conversation_history),
             "rag_enabled": use_rag
         }
+
+    async def stream_chat(
+        self,
+        message: str,
+        use_rag: bool = True,
+        context_limit: int = 5,
+        include_history: bool = True
+    ):
+        """
+        Stream a chat response token by token.
+        Yields dicts: {"token": "..."} for each chunk, then {"done": true, "contexts": [...]}
+        """
+
+        # Add user message to history
+        user_msg = ChatMessage(role="user", content=message)
+        self.conversation_history.append(user_msg)
+
+        # Retrieve document context if RAG enabled
+        contexts = []
+        if use_rag:
+            contexts = self._retrieve_context(message, limit=context_limit)
+
+        # Build the full prompt (same logic as chat)
+        prompt_parts = [self._get_system_prompt(), ""]
+
+        if include_history and len(self.conversation_history) > 1:
+            prompt_parts.append(self._build_conversation_context())
+            prompt_parts.append("")
+
+        if contexts:
+            prompt_parts.append(self._build_context_prompt(contexts))
+            prompt_parts.append("")
+
+        prompt_parts.append(f"QUESTION DE L'UTILISATEUR: {message}")
+        prompt_parts.append("")
+        prompt_parts.append("RÉPONSE:")
+
+        full_prompt = "\n".join(prompt_parts)
+
+        # Stream response
+        full_response = ""
+        try:
+            response = self.model.generate_content(full_prompt, stream=True)
+            for chunk in response:
+                if chunk.text:
+                    full_response += chunk.text
+                    yield {"token": chunk.text}
+        except Exception as e:
+            error_msg = f"Erreur: {str(e)}"
+            full_response = error_msg
+            yield {"token": error_msg}
+
+        # Store in history
+        assistant_msg = ChatMessage(role="assistant", content=full_response)
+        self.conversation_history.append(assistant_msg)
+
+        # Final event with contexts
+        yield {
+            "done": True,
+            "contexts": [ctx.to_dict() for ctx in contexts],
+            "message_count": len(self.conversation_history),
+        }
     
-    async def summarize_document(self, document_text: str, document_name: str) -> str:
+    async def summarize_document(self, document_text: str, document_name: str, locale: str = "fr") -> str:
         """
         Generate a summary of a document.
         """
-        prompt = f"""Résume le document suivant de manière concise mais complète.
+        if locale == "en":
+            prompt = f"""Summarize the following document concisely but comprehensively.
+Mention key points, important dates, people mentioned, and crucial information.
+
+Document: {document_name}
+
+Content:
+{document_text[:10000]}
+
+SUMMARY:"""
+        else:
+            prompt = f"""Résume le document suivant de manière concise mais complète.
 Mentionne les points clés, les dates importantes, les personnes mentionnées et les informations cruciales.
 
 Document: {document_name}
@@ -204,6 +298,8 @@ RÉSUMÉ:"""
             response = self.model.generate_content(prompt)
             return response.text
         except Exception as e:
+            if locale == "en":
+                return f"Error generating summary: {str(e)}"
             return f"Erreur lors de la génération du résumé: {str(e)}"
     
     async def answer_about_document(
@@ -240,13 +336,41 @@ RÉPONSE:"""
         return [msg.to_dict() for msg in self.conversation_history]
 
 
-# Singleton instance
-_chat_service: Optional[AIChatService] = None
+# Session-based instances with TTL eviction (max 100 sessions, 1h TTL)
+_chat_sessions: Dict[str, AIChatService] = {}
+_session_last_access: Dict[str, float] = {}
+_session_lock = threading.Lock()
+_SESSION_TTL = 3600  # 1 hour
+_SESSION_MAX = 100
 
 
-def get_chat_service() -> AIChatService:
-    """Get the AI chat service singleton."""
-    global _chat_service
-    if _chat_service is None:
-        _chat_service = AIChatService()
-    return _chat_service
+def _evict_stale_sessions() -> None:
+    """Remove sessions that haven't been accessed in TTL seconds."""
+    now = _time.time()
+    stale = [sid for sid, ts in _session_last_access.items() if now - ts > _SESSION_TTL]
+    for sid in stale:
+        _chat_sessions.pop(sid, None)
+        _session_last_access.pop(sid, None)
+    # If still over limit, remove oldest
+    if len(_chat_sessions) > _SESSION_MAX:
+        oldest = sorted(_session_last_access, key=_session_last_access.get)
+        for sid in oldest[:len(_chat_sessions) - _SESSION_MAX]:
+            _chat_sessions.pop(sid, None)
+            _session_last_access.pop(sid, None)
+
+
+def get_chat_service(session_id: str = "default") -> AIChatService:
+    """Get or create a chat service for the given session (TTL-evicted)."""
+    with _session_lock:
+        _evict_stale_sessions()
+        if session_id not in _chat_sessions:
+            _chat_sessions[session_id] = AIChatService()
+        _session_last_access[session_id] = _time.time()
+        return _chat_sessions[session_id]
+
+
+def clear_session(session_id: str) -> None:
+    """Remove a chat session entirely."""
+    with _session_lock:
+        _chat_sessions.pop(session_id, None)
+        _session_last_access.pop(session_id, None)

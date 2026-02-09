@@ -1,5 +1,5 @@
 """
-War Room Backend - FastAPI Main Application
+Archon Backend - FastAPI Main Application
 """
 import json
 from contextlib import asynccontextmanager
@@ -21,6 +21,9 @@ from .api.entities import router as entities_router
 from .api.audit import router as audit_router
 from .api.chat import router as chat_router
 from .api.projects import router as projects_router
+from .api.export import router as export_router
+from .api.auth import router as auth_router
+from .api.health import router as health_router
 from .workers.celery_app import celery_app
 
 settings = get_settings()
@@ -47,7 +50,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:3100", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -62,9 +65,12 @@ app.include_router(favorites_router, prefix="/api")
 app.include_router(tags_router, prefix="/api")
 app.include_router(timeline_router, prefix="/api")
 app.include_router(entities_router, prefix="/api")
-app.include_router(audit_router)
-app.include_router(chat_router)
-app.include_router(projects_router)
+app.include_router(audit_router, prefix="/api")
+app.include_router(chat_router, prefix="/api")
+app.include_router(projects_router, prefix="/api")
+app.include_router(export_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(health_router, prefix="/api")
 
 
 # WebSocket connection manager
@@ -188,7 +194,7 @@ async def websocket_scan_progress(websocket: WebSocket, scan_id: int):
 def root():
     """Root endpoint."""
     return {
-        "name": "War Room API",
+        "name": "Archon API",
         "version": "1.0.0",
         "status": "running"
     }

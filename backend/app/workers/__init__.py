@@ -1,1 +1,1 @@
-"""War Room Backend Workers Package."""
+"""Archon Backend Workers Package."""

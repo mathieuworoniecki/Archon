@@ -14,7 +14,15 @@ export default {
             },
         },
         extend: {
+            /* ── Rui Huang Typography ──────────────────────── */
+            fontFamily: {
+                sans: ["'Inter'", "system-ui", "-apple-system", "sans-serif"],
+                mono: ["'Space Mono'", "'JetBrains Mono'", "ui-monospace", "monospace"],
+            },
+
+            /* ── Color Tokens ──────────────────────────────── */
             colors: {
+                /* shadcn/ui backward-compat (HSL) */
                 border: "hsl(var(--border))",
                 input: "hsl(var(--input))",
                 ring: "hsl(var(--ring))",
@@ -52,12 +60,33 @@ export default {
                     DEFAULT: "hsl(var(--highlight))",
                     foreground: "hsl(var(--highlight-foreground))",
                 },
+
+                /* Rui Huang first-class tokens */
+                "deep": "#0F1215",
+                "glass": "rgba(22, 27, 34, 0.60)",
+                "subtle": "rgba(255, 255, 255, 0.08)",
+                "focus": "#F59E0B",
+                "safe": "#2D6A78",
+                "slate-soft": "#E2E8F0",
+                "slate-muted": "#64748B",
             },
+
             borderRadius: {
                 lg: "var(--radius)",
                 md: "calc(var(--radius) - 2px)",
                 sm: "calc(var(--radius) - 4px)",
             },
+
+            backdropBlur: {
+                glass: "16px",
+            },
+
+            boxShadow: {
+                "glass": "0 8px 32px 0 rgba(0, 0, 0, 0.4)",
+                "glass-hover": "0 12px 40px 0 rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(245, 158, 11, 0.15)",
+                "ambient": "0 0 24px rgba(245, 158, 11, 0.3)",
+            },
+
             keyframes: {
                 "accordion-down": {
                     from: { height: 0 },
@@ -67,6 +96,10 @@ export default {
                     from: { height: "var(--radix-accordion-content-height)" },
                     to: { height: 0 },
                 },
+                "ambient-glow": {
+                    "0%, 100%": { boxShadow: "0 0 6px rgba(245, 158, 11, 0.15)" },
+                    "50%": { boxShadow: "0 0 24px rgba(245, 158, 11, 0.3)" },
+                },
                 "pulse-glow": {
                     "0%, 100%": { boxShadow: "0 0 5px hsl(var(--primary))" },
                     "50%": { boxShadow: "0 0 20px hsl(var(--primary))" },
@@ -75,6 +108,7 @@ export default {
             animation: {
                 "accordion-down": "accordion-down 0.2s ease-out",
                 "accordion-up": "accordion-up 0.2s ease-out",
+                "ambient-glow": "ambient-glow 3s ease-in-out infinite",
                 "pulse-glow": "pulse-glow 2s ease-in-out infinite",
             },
         },

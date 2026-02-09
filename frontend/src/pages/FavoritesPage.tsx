@@ -15,12 +15,14 @@ import {
     PopoverTrigger,
 } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
+import { useTranslation } from '@/contexts/I18nContext'
 
 export function FavoritesPage() {
     const { favorites, total, isLoading, refetch } = useFavorites()
     const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null)
     const [tags, setTags] = useState<Tag[]>([])
     const [selectedTagIds, setSelectedTagIds] = useState<number[]>([])
+    const { t } = useTranslation()
     
     // Notes editing state
     const [editingNoteId, setEditingNoteId] = useState<number | null>(null)
@@ -102,7 +104,7 @@ export function FavoritesPage() {
             setSynthesis(data.synthesis)
         } catch (err) {
             console.error('Failed to generate synthesis:', err)
-            setSynthesis("Erreur lors de la génération de la synthèse. Vérifiez que GEMINI_API_KEY est configurée.")
+            setSynthesis(t('favorites.synthesisError'))
         } finally {
             setIsSynthesizing(false)
         }
@@ -126,7 +128,7 @@ export function FavoritesPage() {
     if (isLoading && favorites.length === 0) {
         return (
             <div className="flex-1 flex items-center justify-center">
-                <div className="animate-pulse text-muted-foreground">Chargement des favoris...</div>
+                <div className="animate-pulse text-muted-foreground">{t('favorites.loadingFavorites')}</div>
             </div>
         )
     }
@@ -140,7 +142,7 @@ export function FavoritesPage() {
                     <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
                             <Star className="h-5 w-5 text-yellow-500 fill-yellow-500" />
-                            <h2 className="font-semibold">Mes Favoris</h2>
+                            <h2 className="font-semibold">{t('favorites.title')}</h2>
                             <Badge variant="secondary">{total}</Badge>
                         </div>
                         
@@ -157,7 +159,7 @@ export function FavoritesPage() {
                             ) : (
                                 <Sparkles className="h-4 w-4" />
                             )}
-                            Synthèse IA
+                            {t('favorites.synthesize')}
                         </Button>
                     </div>
 
@@ -192,7 +194,7 @@ export function FavoritesPage() {
                         <div className="flex items-start justify-between gap-2">
                             <div className="flex items-center gap-2 text-sm font-medium">
                                 <Sparkles className="h-4 w-4 text-primary" />
-                                Synthèse IA
+                                {t('favorites.synthesisTitle')}
                             </div>
                             <Button
                                 variant="ghost"
@@ -214,11 +216,11 @@ export function FavoritesPage() {
                     {favorites.length === 0 ? (
                         <div className="p-8 text-center text-muted-foreground">
                             <Star className="h-12 w-12 mx-auto mb-4 opacity-20" />
-                            <p className="font-medium">Aucun favori</p>
+                            <p className="font-medium">{t('favorites.noFavorites')}</p>
                             <p className="text-sm mt-1">
                                 {selectedTagIds.length > 0 
-                                    ? "Aucun favori avec ces étiquettes" 
-                                    : "Ajoutez des documents à vos favoris pour les retrouver ici"
+                                    ? t('favorites.noFavoritesWithTags')
+                                    : t('favorites.addToFavorites')
                                 }
                             </p>
                         </div>
@@ -240,7 +242,7 @@ export function FavoritesPage() {
                                             </span>
                                             <div className="flex-1 min-w-0">
                                                 <p className="font-medium truncate">
-                                                    {fav.document?.file_name ?? 'Document inconnu'}
+                                                    {fav.document?.file_name ?? t('favorites.unknownDoc')}
                                                 </p>
                                                 <p className="text-xs text-muted-foreground truncate">
                                                     {fav.document?.file_path}
@@ -248,7 +250,7 @@ export function FavoritesPage() {
                                                 <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
                                                     <span>{formatFileSize(fav.document?.file_size ?? 0)}</span>
                                                     <span>•</span>
-                                                    <span>Ajouté {new Date(fav.created_at).toLocaleDateString()}</span>
+                                                    <span>{t('favorites.added')} {new Date(fav.created_at).toLocaleDateString()}</span>
                                                 </div>
                                                 
                                                 {/* Tags */}
@@ -283,10 +285,10 @@ export function FavoritesPage() {
                                                         >
                                                             <div className="flex items-center gap-2 mb-2 pb-2 border-b">
                                                                 <Tags className="h-4 w-4" />
-                                                                <span className="text-sm font-medium">Étiquettes</span>
+                                                                <span className="text-sm font-medium">{t('favorites.tags')}</span>
                                                             </div>
                                                             {tags.length === 0 ? (
-                                                                <p className="text-xs text-muted-foreground">Aucune étiquette</p>
+                                                                <p className="text-xs text-muted-foreground">{t('favorites.noTags')}</p>
                                                             ) : (
                                                                 <div className="space-y-1">
                                                                     {tags.map(tag => {
@@ -318,7 +320,7 @@ export function FavoritesPage() {
                                                         <Textarea
                                                             value={editingNoteText}
                                                             onChange={e => setEditingNoteText(e.target.value)}
-                                                            placeholder="Ajouter une note..."
+                                                            placeholder={t('favorites.addNote')}
                                                             className="text-xs min-h-[60px]"
                                                         />
                                                         <div className="flex gap-1 mt-1">
@@ -328,7 +330,7 @@ export function FavoritesPage() {
                                                                 onClick={() => saveNote(fav.document_id)}
                                                             >
                                                                 <Check className="h-3 w-3 mr-1" />
-                                                                Sauver
+                                                                {t('favorites.save')}
                                                             </Button>
                                                             <Button
                                                                 size="sm"
@@ -336,7 +338,7 @@ export function FavoritesPage() {
                                                                 className="h-6 text-xs"
                                                                 onClick={cancelEditingNote}
                                                             >
-                                                                Annuler
+                                                                {t('favorites.cancel')}
                                                             </Button>
                                                         </div>
                                                     </div>
@@ -355,7 +357,7 @@ export function FavoritesPage() {
                                                         ) : (
                                                             <p className="text-xs text-muted-foreground/50 hover:text-muted-foreground flex items-center gap-1">
                                                                 <Edit3 className="h-3 w-3" />
-                                                                Ajouter une note...
+                                                                {t('favorites.addNote')}
                                                             </p>
                                                         )}
                                                     </div>

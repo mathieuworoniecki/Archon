@@ -1,5 +1,5 @@
 """
-War Room Backend - Meilisearch Service
+Archon Backend - Meilisearch Service
 Full-text search and highlighting
 """
 import meilisearch

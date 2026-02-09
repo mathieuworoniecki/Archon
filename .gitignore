@@ -37,3 +37,9 @@ logs/
 test_documents/
 documents/
 
+# Dev notes & reference images
+exemples/
+crea.md
+audit.md
+AI.md
+*:Zone.Identifier

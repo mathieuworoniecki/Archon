@@ -1,5 +1,5 @@
 """
-War Room Backend - Stats API Routes
+Archon Backend - Stats API Routes
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -32,6 +32,7 @@ def get_stats(db: Session = Depends(get_db)):
         pdf=0,
         image=0,
         text=0,
+        video=0,
         unknown=0
     )
     
@@ -42,6 +43,8 @@ def get_stats(db: Session = Depends(get_db)):
             documents_by_type.image = count
         elif file_type == DocumentType.TEXT:
             documents_by_type.text = count
+        elif file_type == DocumentType.VIDEO:
+            documents_by_type.video = count
         else:
             documents_by_type.unknown = count
     
@@ -69,3 +72,70 @@ def get_stats(db: Session = Depends(get_db)):
         index_size_bytes=index_size_bytes,
         total_file_size_bytes=total_file_size
     )
+
+
+@router.get("/stream")
+async def stream_stats(db: Session = Depends(get_db)):
+    """
+    Stream real-time statistics via Server-Sent Events (SSE).
+    
+    Yields stats updates every 3 seconds for live dashboards.
+    """
+    from fastapi.responses import StreamingResponse
+    import asyncio
+    import json
+    
+    async def event_generator():
+        """Generate SSE events for stats updates."""
+        while True:
+            # Get fresh stats
+            total_documents = db.query(func.count(Document.id)).scalar() or 0
+            
+            type_counts = db.query(
+                Document.file_type,
+                func.count(Document.id)
+            ).group_by(Document.file_type).all()
+            
+            by_type = {"pdf": 0, "image": 0, "text": 0, "video": 0, "unknown": 0}
+            for file_type, count in type_counts:
+                if file_type == DocumentType.PDF:
+                    by_type["pdf"] = count
+                elif file_type == DocumentType.IMAGE:
+                    by_type["image"] = count
+                elif file_type == DocumentType.TEXT:
+                    by_type["text"] = count
+                elif file_type == DocumentType.VIDEO:
+                    by_type["video"] = count
+                else:
+                    by_type["unknown"] = count
+            
+            total_scans = db.query(func.count(Scan.id)).scalar() or 0
+            running_scans = db.query(func.count(Scan.id)).filter(
+                Scan.status == ScanStatus.RUNNING
+            ).scalar() or 0
+            
+            total_file_size = db.query(func.sum(Document.file_size)).scalar() or 0
+            
+            stats_data = {
+                "total_documents": total_documents,
+                "documents_by_type": by_type,
+                "total_scans": total_scans,
+                "running_scans": running_scans,
+                "total_file_size_bytes": total_file_size,
+                "timestamp": asyncio.get_event_loop().time()
+            }
+            
+            yield f"data: {json.dumps(stats_data)}\n\n"
+            
+            await asyncio.sleep(3)  # Update every 3 seconds
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+

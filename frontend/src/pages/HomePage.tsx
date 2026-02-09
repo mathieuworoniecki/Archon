@@ -6,13 +6,12 @@ import { ResultList } from '@/components/search/ResultList'
 import { DocumentViewer } from '@/components/viewer/DocumentViewer'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { BrowseFilters } from '@/components/browse/BrowseFilters'
-import { TimelineHeatmap } from '@/components/timeline/TimelineHeatmap'
-import { EntityFilter } from '@/components/entities/EntityFilter'
 import { Button } from '@/components/ui/button'
 import { useSearch } from '@/hooks/useSearch'
 import { useStats } from '@/hooks/useStats'
 import { useBrowse } from '@/hooks/useBrowse'
 import { SearchResult, Document, FileType } from '@/lib/api'
+import { useTranslation } from '@/contexts/I18nContext'
 
 type ViewMode = 'search' | 'browse'
 
@@ -20,6 +19,7 @@ export function HomePage() {
     const { results, totalResults, processingTime, isLoading, lastQuery, performSearch } = useSearch()
     const { stats, isLoading: statsLoading, hasDocuments } = useStats()
     const browse = useBrowse()
+    const { t } = useTranslation()
 
     const [viewMode, setViewMode] = useState<ViewMode>('search')
     const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null)
@@ -68,7 +68,7 @@ export function HomePage() {
     if (statsLoading) {
         return (
             <div className="flex-1 flex items-center justify-center">
-                <div className="animate-pulse text-muted-foreground">Chargement...</div>
+                <div className="animate-pulse text-muted-foreground">{t('home.loading')}</div>
             </div>
         )
     }
@@ -92,7 +92,7 @@ export function HomePage() {
                                 className="gap-1.5 h-7"
                             >
                                 <Search className="h-3.5 w-3.5" />
-                                Recherche
+                                {t('home.search')}
                             </Button>
                             <Button
                                 variant={viewMode === 'browse' ? 'default' : 'ghost'}
@@ -101,7 +101,7 @@ export function HomePage() {
                                 className="gap-1.5 h-7"
                             >
                                 <FolderOpen className="h-3.5 w-3.5" />
-                                Explorer
+                                {t('home.browse')}
                             </Button>
                         </div>
                     </div>
@@ -116,12 +116,6 @@ export function HomePage() {
                                     disabled={!hasDocuments}
                                 />
                             </div>
-
-                            {/* Timeline Heatmap */}
-                            <TimelineHeatmap className="px-4 py-2 border-b" />
-
-                            {/* Entity Filter */}
-                            <EntityFilter className="px-4 py-2 border-b" />
 
                             {/* Search Results */}
                             <div className="flex-1 overflow-hidden">
@@ -171,7 +165,7 @@ export function HomePage() {
                             {browse.total > (browse.filters.limit ?? 50) && (
                                 <div className="p-3 border-t bg-card/30 flex items-center justify-between text-sm">
                                     <span className="text-muted-foreground">
-                                        {(browse.filters.skip ?? 0) + 1}-{Math.min((browse.filters.skip ?? 0) + (browse.filters.limit ?? 50), browse.total)} sur {browse.total}
+                                        {(browse.filters.skip ?? 0) + 1}-{Math.min((browse.filters.skip ?? 0) + (browse.filters.limit ?? 50), browse.total)} {t('home.of')} {browse.total}
                                     </span>
                                     <div className="flex gap-2">
                                         <Button
@@ -180,7 +174,7 @@ export function HomePage() {
                                             onClick={browse.prevPage}
                                             disabled={(browse.filters.skip ?? 0) === 0}
                                         >
-                                            Précédent
+                                            {t('home.previous')}
                                         </Button>
                                         <Button
                                             variant="outline"
@@ -188,7 +182,7 @@ export function HomePage() {
                                             onClick={browse.nextPage}
                                             disabled={(browse.filters.skip ?? 0) + (browse.filters.limit ?? 50) >= browse.total}
                                         >
-                                            Suivant
+                                            {t('home.next')}
                                         </Button>
                                     </div>
                                 </div>

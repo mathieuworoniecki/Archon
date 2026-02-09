@@ -69,7 +69,10 @@ export function DropdownMenuContent({ children, align = 'start', onClose }: Drop
 
     return (
         <div className={cn(
-            "absolute top-full mt-1 z-50 min-w-32 rounded-md border bg-popover p-1 shadow-md",
+            "absolute top-full mt-1 z-50 min-w-32 rounded-md p-1 shadow-glass",
+            "bg-gradient-to-b from-[rgba(30,41,59,0.5)] to-[rgba(15,23,42,0.7)]",
+            "backdrop-blur-[16px] backdrop-saturate-[90%]",
+            "border-t border-t-[rgba(255,255,255,0.12)] border-b border-b-[rgba(0,0,0,0.4)] border-l border-l-[rgba(255,255,255,0.04)] border-r border-r-[rgba(255,255,255,0.04)]",
             alignClass[align]
         )}>
             {React.Children.map(children, child => {
@@ -109,3 +112,8 @@ export function DropdownMenuItem({ children, onClick, onSelect, className }: Dro
         </button>
     )
 }
+
+export function DropdownMenuSeparator({ className }: { className?: string }) {
+    return <div className={cn("-mx-1 my-1 h-px bg-border", className)} />
+}
+

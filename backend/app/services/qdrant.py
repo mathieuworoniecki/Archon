@@ -1,8 +1,7 @@
 """
-War Room Backend - Qdrant Service
+Archon Backend - Qdrant Service
 Vector database for semantic search
 """
-import json
 import uuid
 from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
@@ -12,8 +11,8 @@ from ..config import get_settings
 
 settings = get_settings()
 
-# Gemini text-embedding-004 dimension
-EMBEDDING_DIMENSION = 768
+# Gemini gemini-embedding-001 dimension
+EMBEDDING_DIMENSION = 3072
 
 
 class QdrantService:

@@ -7,13 +7,14 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from pydantic import BaseModel
+import hashlib
 import json
 
 from ..database import get_db
 from ..models import AuditLog, AuditAction, Document
 
 
-router = APIRouter(prefix="/api/audit", tags=["audit"])
+router = APIRouter(prefix="/audit", tags=["audit"])
 
 
 class AuditLogResponse(BaseModel):
@@ -23,6 +24,8 @@ class AuditLogResponse(BaseModel):
     scan_id: Optional[int] = None
     details: Optional[dict] = None
     user_ip: Optional[str] = None
+    entry_hash: Optional[str] = None
+    previous_hash: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -44,6 +47,17 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _compute_entry_hash(
+    action: str,
+    created_at: str,
+    details: Optional[str],
+    previous_hash: Optional[str]
+) -> str:
+    """Compute SHA256 hash for an audit entry (tamper evidence)."""
+    payload = f"{action}|{created_at}|{details or ''}|{previous_hash or 'GENESIS'}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def log_audit_action(
     db: Session,
     action: AuditAction,
@@ -52,13 +66,28 @@ def log_audit_action(
     details: Optional[dict] = None,
     user_ip: Optional[str] = None
 ) -> AuditLog:
-    """Create an audit log entry."""
+    """Create an audit log entry with hash-chain integrity."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    details_json = json.dumps(details) if details else None
+
+    # Get hash of previous entry to form the chain
+    prev = db.query(AuditLog).order_by(AuditLog.id.desc()).first()
+    previous_hash = prev.entry_hash if (prev and prev.entry_hash) else None
+
+    entry_hash = _compute_entry_hash(
+        action.value, now.isoformat(), details_json, previous_hash
+    )
+
     log = AuditLog(
         action=action,
         document_id=document_id,
         scan_id=scan_id,
-        details=json.dumps(details) if details else None,
-        user_ip=user_ip
+        details=details_json,
+        user_ip=user_ip,
+        entry_hash=entry_hash,
+        previous_hash=previous_hash,
+        created_at=now
     )
     db.add(log)
     db.commit()
@@ -97,6 +126,8 @@ async def get_audit_logs(
             "scan_id": log.scan_id,
             "details": json.loads(log.details) if log.details else None,
             "user_ip": log.user_ip,
+            "entry_hash": log.entry_hash,
+            "previous_hash": log.previous_hash,
             "created_at": log.created_at
         }
         result.append(log_dict)
@@ -135,6 +166,8 @@ async def get_document_audit_trail(
                 "action": log.action.value if hasattr(log.action, 'value') else log.action,
                 "details": json.loads(log.details) if log.details else None,
                 "user_ip": log.user_ip,
+                "entry_hash": log.entry_hash,
+                "previous_hash": log.previous_hash,
                 "created_at": log.created_at
             }
             for log in logs

@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Bot, User, FileText, Trash2, Sparkles, Loader2 } from 'lucide-react'
+import { Send, Bot, User, FileText, Trash2, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { useTranslation } from '@/contexts/I18nContext'
 
 interface ChatMessage {
     role: 'user' | 'assistant'
@@ -20,22 +21,19 @@ interface DocumentContext {
     relevance_score: number
 }
 
-interface ChatResponse {
-    response: string
-    contexts: DocumentContext[]
-    message_count: number
-    rag_enabled: boolean
-}
+
 
 export function ChatPage() {
     const [messages, setMessages] = useState<ChatMessage[]>([])
     const [input, setInput] = useState('')
     const [isLoading, setIsLoading] = useState(false)
     const [contexts, setContexts] = useState<DocumentContext[]>([])
+    const [isStreaming, setIsStreaming] = useState(false)
     const scrollRef = useRef<HTMLDivElement>(null)
+    const sessionIdRef = useRef<string>(crypto.randomUUID())
+    const { t } = useTranslation()
 
     useEffect(() => {
-        // Scroll to bottom on new messages
         if (scrollRef.current) {
             scrollRef.current.scrollIntoView({ behavior: 'smooth' })
         }
@@ -50,55 +48,102 @@ export function ChatPage() {
             timestamp: new Date().toISOString()
         }
 
+        const currentInput = input
         setMessages(prev => [...prev, userMessage])
         setInput('')
         setIsLoading(true)
+        setIsStreaming(false)
+
+        // Add empty assistant message that we'll stream into
+        const assistantMessage: ChatMessage = {
+            role: 'assistant',
+            content: '',
+            timestamp: new Date().toISOString()
+        }
+        setMessages(prev => [...prev, assistantMessage])
 
         try {
-            const response = await fetch('/api/chat/', {
+            const response = await fetch('/api/chat/stream', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Session-Id': sessionIdRef.current,
+                },
                 body: JSON.stringify({
-                    message: input,
+                    message: currentInput,
                     use_rag: true,
                     context_limit: 5,
                     include_history: true
                 })
             })
 
-            if (response.ok) {
-                const data: ChatResponse = await response.json()
-                
-                const assistantMessage: ChatMessage = {
-                    role: 'assistant',
-                    content: data.response,
-                    timestamp: new Date().toISOString()
+            if (!response.ok || !response.body) {
+                setMessages(prev => {
+                    const updated = [...prev]
+                    updated[updated.length - 1] = { ...updated[updated.length - 1], content: t('chat.errorComm') }
+                    return updated
+                })
+                return
+            }
+
+            const reader = response.body.getReader()
+            const decoder = new TextDecoder()
+            let buffer = ''
+
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+
+                buffer += decoder.decode(value, { stream: true })
+                const lines = buffer.split('\n')
+                buffer = lines.pop() || ''
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue
+                    try {
+                        const data = JSON.parse(line.slice(6))
+                        if (data.token) {
+                            if (!isStreaming) setIsStreaming(true)
+                            setMessages(prev => {
+                                const updated = [...prev]
+                                const last = updated[updated.length - 1]
+                                updated[updated.length - 1] = {
+                                    ...last,
+                                    content: last.content + data.token
+                                }
+                                return updated
+                            })
+                        }
+                        if (data.done) {
+                            setContexts(data.contexts || [])
+                        }
+                    } catch {
+                        // Skip malformed JSON
+                    }
                 }
-                
-                setMessages(prev => [...prev, assistantMessage])
-                setContexts(data.contexts)
-            } else {
-                setMessages(prev => [...prev, {
-                    role: 'assistant',
-                    content: 'Erreur lors de la communication avec l\'assistant.',
-                    timestamp: new Date().toISOString()
-                }])
             }
         } catch (error) {
             console.error('Chat error:', error)
-            setMessages(prev => [...prev, {
-                role: 'assistant',
-                content: 'Impossible de contacter le serveur.',
-                timestamp: new Date().toISOString()
-            }])
+            setMessages(prev => {
+                const updated = [...prev]
+                updated[updated.length - 1] = {
+                    ...updated[updated.length - 1],
+                    content: updated[updated.length - 1].content || t('chat.errorServer')
+                }
+                return updated
+            })
         } finally {
             setIsLoading(false)
+            setIsStreaming(false)
         }
     }
 
     const clearHistory = async () => {
         try {
-            await fetch('/api/chat/clear', { method: 'POST' })
+            await fetch('/api/chat/clear', {
+                method: 'POST',
+                headers: { 'X-Session-Id': sessionIdRef.current },
+            })
             setMessages([])
             setContexts([])
         } catch (error) {
@@ -113,6 +158,13 @@ export function ChatPage() {
         }
     }
 
+    const suggestions = [
+        { icon: '📋', text: t('chat.suggestion1') },
+        { icon: '👤', text: t('chat.suggestion2') },
+        { icon: '🔗', text: t('chat.suggestion3') },
+        { icon: '📅', text: t('chat.suggestion4') },
+    ]
+
     return (
         <div className="h-full flex">
             {/* Main Chat Area */}
@@ -120,12 +172,12 @@ export function ChatPage() {
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                         <Sparkles className="h-6 w-6 text-primary" />
-                        <h2 className="text-2xl font-semibold">Assistant IA</h2>
-                        <Badge variant="secondary">RAG activé</Badge>
+                        <h2 className="text-2xl font-semibold">{t('chat.title')}</h2>
+                        <Badge variant="secondary">{t('chat.ragEnabled')}</Badge>
                     </div>
                     <Button variant="outline" size="sm" onClick={clearHistory}>
                         <Trash2 className="h-4 w-4 mr-2" />
-                        Effacer
+                        {t('chat.clear')}
                     </Button>
                 </div>
 
@@ -134,13 +186,28 @@ export function ChatPage() {
                     <ScrollArea className="h-full pr-4">
                         {messages.length === 0 ? (
                             <div className="h-full flex items-center justify-center text-muted-foreground">
-                                <div className="text-center">
+                                <div className="text-center max-w-md">
                                     <Bot className="h-16 w-16 mx-auto mb-4 opacity-20" />
-                                    <p className="text-lg font-medium">Assistant d'Investigation</p>
-                                    <p className="text-sm mt-2">
-                                        Posez des questions sur vos documents.<br/>
-                                        L'IA recherchera automatiquement le contexte pertinent.
+                                    <p className="text-lg font-medium">{t('chat.investigationAssistant')}</p>
+                                    <p className="text-sm mt-2 mb-6">
+                                        {t('chat.askAboutDocs')}<br/>
+                                        {t('chat.autoContext')}
                                     </p>
+                                    <div className="grid grid-cols-2 gap-2 text-left">
+                                        {suggestions.map((suggestion, i) => (
+                                            <button
+                                                key={i}
+                                                onClick={() => {
+                                                    setInput(suggestion.text)
+                                                    setTimeout(() => sendMessage(), 100)
+                                                }}
+                                                className="p-3 text-xs rounded-lg border bg-card/50 hover:bg-accent/50 transition-colors text-left flex items-start gap-2"
+                                            >
+                                                <span>{suggestion.icon}</span>
+                                                <span>{suggestion.text}</span>
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                         ) : (
@@ -166,7 +233,18 @@ export function ChatPage() {
                                                     : "bg-muted"
                                             )}
                                         >
-                                            <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+                                            <p className="whitespace-pre-wrap text-sm">
+                                                {msg.content || (
+                                                    <span className="flex items-center gap-1 text-muted-foreground">
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-current animate-bounce" style={{ animationDelay: '0ms' }} />
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-current animate-bounce" style={{ animationDelay: '150ms' }} />
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-current animate-bounce" style={{ animationDelay: '300ms' }} />
+                                                    </span>
+                                                )}
+                                                {isStreaming && idx === messages.length - 1 && msg.role === 'assistant' && (
+                                                    <span className="inline-block w-0.5 h-4 bg-primary animate-pulse ml-0.5 align-text-bottom" />
+                                                )}
+                                            </p>
                                         </div>
                                         {msg.role === 'user' && (
                                             <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center shrink-0">
@@ -175,16 +253,7 @@ export function ChatPage() {
                                         )}
                                     </div>
                                 ))}
-                                {isLoading && (
-                                    <div className="flex gap-3 justify-start">
-                                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-                                            <Bot className="h-4 w-4 text-primary" />
-                                        </div>
-                                        <div className="bg-muted rounded-lg px-4 py-3">
-                                            <Loader2 className="h-4 w-4 animate-spin" />
-                                        </div>
-                                    </div>
-                                )}
+
                                 <div ref={scrollRef} />
                             </div>
                         )}
@@ -197,7 +266,7 @@ export function ChatPage() {
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyPress={handleKeyPress}
-                        placeholder="Posez une question sur vos documents..."
+                        placeholder={t('chat.placeholder')}
                         className="flex-1"
                         disabled={isLoading}
                     />
@@ -211,12 +280,12 @@ export function ChatPage() {
             <div className="w-80 border-l bg-card/30 p-4 overflow-auto">
                 <div className="flex items-center gap-2 mb-4">
                     <FileText className="h-4 w-4 text-muted-foreground" />
-                    <h3 className="font-medium">Documents utilisés</h3>
+                    <h3 className="font-medium">{t('chat.usedDocuments')}</h3>
                 </div>
                 
                 {contexts.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
-                        Les documents pertinents apparaîtront ici après votre première question.
+                        {t('chat.docsAfterQuestion')}
                     </p>
                 ) : (
                     <div className="space-y-3">

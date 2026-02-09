@@ -1,42 +1,50 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ScanProgress, connectScanWebSocket } from '@/lib/api'
+import { ScanProgress, connectScanStream } from '@/lib/api'
 
 export function useScanProgress(scanId: number | null) {
     const [progress, setProgress] = useState<ScanProgress | null>(null)
     const [isComplete, setIsComplete] = useState(false)
+    const [isReconnecting, setIsReconnecting] = useState(false)
     const [error, setError] = useState<string | null>(null)
-    const wsRef = useRef<WebSocket | null>(null)
+    const connectionRef = useRef<{ close: () => void } | null>(null)
 
     useEffect(() => {
         if (!scanId) return
 
-        const ws = connectScanWebSocket(
+        setIsComplete(false)
+        setIsReconnecting(false)
+        setError(null)
+
+        const connection = connectScanStream(
             scanId,
-            (message) => {
-                if (message.type === 'progress') {
-                    setProgress(message.data)
-                } else if (message.type === 'complete') {
-                    setProgress(message.data)
-                    setIsComplete(true)
-                } else if (message.type === 'error') {
-                    setError((message.data as { message?: string }).message || 'Unknown error')
-                }
+            (data) => {
+                setIsReconnecting(false)
+                setProgress(data)
             },
             () => {
-                setError('WebSocket connection failed')
+                setIsReconnecting(false)
+                setIsComplete(true)
+            },
+            () => {
+                setIsReconnecting(false)
+                setError('Connection failed')
+            },
+            (attempt) => {
+                setIsReconnecting(true)
+                console.log(`Reconnecting to scan ${scanId}, attempt ${attempt}`)
             }
         )
 
-        wsRef.current = ws
+        connectionRef.current = connection
 
         return () => {
-            ws.close()
+            connection.close()
         }
     }, [scanId])
 
     const disconnect = useCallback(() => {
-        wsRef.current?.close()
+        connectionRef.current?.close()
     }, [])
 
-    return { progress, isComplete, error, disconnect }
+    return { progress, isComplete, isReconnecting, error, disconnect }
 }

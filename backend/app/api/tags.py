@@ -1,5 +1,5 @@
 """
-War Room Backend - Tags API Routes
+Archon Backend - Tags API Routes
 """
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query

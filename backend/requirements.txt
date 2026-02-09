@@ -1,4 +1,4 @@
-# War Room Backend
+# Archon Backend
 
 # FastAPI & Web
 fastapi==0.109.0
@@ -34,6 +34,10 @@ python-magic==0.4.27
 rarfile==4.1
 py7zr==0.20.8
 
+# Email Parsing
+eml-parser==1.17.5
+compressed-rtf==1.0.6
+
 # NLP / Entity Extraction
 spacy==3.7.2
 
@@ -42,3 +46,15 @@ python-dotenv==1.0.0
 pydantic==2.5.3
 pydantic-settings==2.1.0
 httpx==0.26.0
+
+# Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+
+# Database Migrations
+alembic==1.13.1
+
+# Testing
+pytest==8.2.0
+pytest-asyncio==0.24.0

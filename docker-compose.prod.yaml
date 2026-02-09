@@ -27,9 +27,9 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - MEILISEARCH_URL=http://meilisearch:7700
-      - MEILISEARCH_API_KEY=archon_meili_master_key_2024
+      - MEILISEARCH_API_KEY=${MEILISEARCH_API_KEY:-changeme}
       - QDRANT_URL=http://qdrant:6333
-      - DATABASE_URL=postgresql://archon:archon_secure_pwd@postgres:5432/archon
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-archon}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-archon}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - TESSERACT_CMD=/usr/bin/tesseract
     volumes:
@@ -62,9 +62,9 @@ services:
     environment: &celery_env
       - REDIS_URL=redis://redis:6379/0
       - MEILISEARCH_URL=http://meilisearch:7700
-      - MEILISEARCH_API_KEY=archon_meili_master_key_2024
+      - MEILISEARCH_API_KEY=${MEILISEARCH_API_KEY:-changeme}
       - QDRANT_URL=http://qdrant:6333
-      - DATABASE_URL=postgresql://archon:archon_secure_pwd@postgres:5432/archon
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-archon}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-archon}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - TESSERACT_CMD=/usr/bin/tesseract
     volumes: &celery_volumes
@@ -143,7 +143,7 @@ services:
       - "5555:5555"
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql://archon:archon_secure_pwd@postgres:5432/archon
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-archon}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-archon}
     depends_on:
       - redis
     networks:
@@ -159,9 +159,9 @@ services:
     ports:
       - "5433:5432"
     environment:
-      - POSTGRES_USER=archon
-      - POSTGRES_PASSWORD=archon_secure_pwd
-      - POSTGRES_DB=archon
+      - POSTGRES_USER=${POSTGRES_USER:-archon}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_DB=${POSTGRES_DB:-archon}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -189,7 +189,7 @@ services:
       - meilisearch_data:/meili_data
     environment:
       - MEILI_ENV=production
-      - MEILI_MASTER_KEY=archon_meili_master_key_2024
+      - MEILI_MASTER_KEY=${MEILISEARCH_API_KEY:-changeme}
       - MEILI_NO_ANALYTICS=true
       - MEILI_MAX_INDEXING_MEMORY=8Gb
       - MEILI_MAX_INDEXING_THREADS=8

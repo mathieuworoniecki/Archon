@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Document as PDFDocument, Page, pdfjs } from 'react-pdf'
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, FileText, Image as ImageIcon, FileCode, ExternalLink } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, FileText, Image as ImageIcon, FileCode, ExternalLink, Home } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { getDocumentFileUrl, getDocument } from '@/lib/api'
@@ -14,8 +14,28 @@ interface DocumentViewerProps {
     searchQuery?: string
 }
 
+function Breadcrumb({ filePath }: { filePath: string }) {
+    const parts = filePath.split('/').filter(Boolean)
+    // Show last 4 segments max
+    const visibleParts = parts.length > 4 ? ['...', ...parts.slice(-4)] : parts
+
+    return (
+        <div className="flex items-center gap-0.5 px-3 py-1.5 border-b bg-muted/30 text-xs text-muted-foreground overflow-hidden">
+            <Home className="h-3 w-3 flex-shrink-0" />
+            {visibleParts.map((part, i) => (
+                <span key={i} className="flex items-center gap-0.5">
+                    <ChevronRight className="h-3 w-3 flex-shrink-0 opacity-40" />
+                    <span className={`truncate ${i === visibleParts.length - 1 ? 'text-foreground font-medium' : ''}`}>
+                        {part}
+                    </span>
+                </span>
+            ))}
+        </div>
+    )
+}
+
 export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps) {
-    const [docInfo, setDocInfo] = useState<{ file_name: string; file_type: string; text_content?: string } | null>(null)
+    const [docInfo, setDocInfo] = useState<{ file_name: string; file_type: string; file_path?: string; text_content?: string } | null>(null)
     const [numPages, setNumPages] = useState<number>(0)
     const [pageNumber, setPageNumber] = useState(1)
     const [scale, setScale] = useState(1.0)
@@ -67,6 +87,7 @@ export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps)
     if (docInfo?.file_type === 'pdf') {
         return (
             <div className="flex flex-col h-full">
+                {docInfo.file_path && <Breadcrumb filePath={docInfo.file_path} />}
                 {/* Toolbar */}
                 <div className="flex items-center justify-between p-2 border-b bg-card">
                     <div className="flex items-center gap-2">
@@ -147,6 +168,7 @@ export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps)
     if (docInfo?.file_type === 'image') {
         return (
             <div className="flex flex-col h-full">
+                {docInfo.file_path && <Breadcrumb filePath={docInfo.file_path} />}
                 <div className="flex items-center justify-between p-2 border-b bg-card">
                     <div className="flex items-center gap-2">
                         <ImageIcon className="h-4 w-4" />
@@ -188,6 +210,7 @@ export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps)
     // Text Viewer
     return (
         <div className="flex flex-col h-full">
+            {docInfo?.file_path && <Breadcrumb filePath={docInfo.file_path} />}
             <div className="flex items-center justify-between p-2 border-b bg-card">
                 <div className="flex items-center gap-2">
                     <FileCode className="h-4 w-4" />

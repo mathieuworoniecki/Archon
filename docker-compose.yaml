@@ -28,6 +28,7 @@ services:
       - DATABASE_URL=sqlite:///./data/finders.db
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - TESSERACT_CMD=/usr/bin/tesseract
+      - DISABLE_AUTH=${DISABLE_AUTH:-false}
     volumes:
       - backend_data:/app/data
       - ${DOCUMENTS_PATH:-./documents}:/documents:ro
@@ -48,7 +49,7 @@ services:
   celery-worker:
     build: ./backend
     container_name: finders-celery
-    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q celery,scan,documents
     environment:
       - REDIS_URL=redis://redis:6379/0
       - MEILISEARCH_URL=http://meilisearch:7700

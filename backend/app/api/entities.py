@@ -1,5 +1,5 @@
 """
-War Room Backend - Entities API Routes
+Archon Backend - Entities API Routes
 Provides access to extracted named entities
 """
 from typing import Optional, List

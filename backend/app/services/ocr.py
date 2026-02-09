@@ -1,8 +1,9 @@
 """
-War Room Backend - OCR Service
+Archon Backend - OCR Service
 Text extraction from images and scanned PDFs using Tesseract
 """
 import os
+import logging
 from pathlib import Path
 from typing import Optional, Tuple
 from PIL import Image
@@ -10,6 +11,8 @@ import pytesseract
 import fitz  # PyMuPDF
 from ..config import get_settings
 from ..models import DocumentType
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -24,6 +27,7 @@ class OCRService:
     # Supported file extensions
     PDF_EXTENSIONS = {".pdf"}
     IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif", ".webp"}
+    EMAIL_EXTENSIONS = {".eml", ".msg", ".mbox", ".mbx", ".pst", ".ost"}
     VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v", ".wmv"}
     TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm", ".log"}
     
@@ -47,7 +51,9 @@ class OCRService:
         elif ext in self.IMAGE_EXTENSIONS:
             return DocumentType.IMAGE
         elif ext in self.VIDEO_EXTENSIONS:
-            return DocumentType.IMAGE  # Treat videos as images for indexing (will OCR keyframes)
+            return DocumentType.VIDEO
+        elif ext in self.EMAIL_EXTENSIONS:
+            return DocumentType.EMAIL
         elif ext in self.TEXT_EXTENSIONS:
             return DocumentType.TEXT
         else:
@@ -72,10 +78,24 @@ class OCRService:
             return self._extract_from_pdf(file_path)
         elif doc_type == DocumentType.IMAGE:
             return self._extract_from_image(file_path)
+        elif doc_type == DocumentType.EMAIL:
+            return self._extract_from_email(file_path)
         elif doc_type == DocumentType.TEXT:
             return self._extract_from_text(file_path)
         else:
             return "", False
+    
+    def _extract_from_email(self, file_path: str) -> Tuple[str, bool]:
+        """Extract text from email files (EML, MBOX, PST)."""
+        try:
+            from .email_parser import get_email_parser
+            parser = get_email_parser()
+            text, success = parser.extract_text(file_path)
+            return text, False  # No OCR used for emails
+        except Exception as e:
+            logger.warning(f"Email extraction failed for {file_path}: {e}")
+            # Fallback: try as plain text
+            return self._extract_from_text(file_path)
     
     def _extract_from_pdf(self, file_path: str) -> Tuple[str, bool]:
         """Extract text from PDF, using OCR if needed."""

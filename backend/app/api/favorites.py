@@ -1,5 +1,5 @@
 """
-War Room Backend - Favorites API Routes
+Archon Backend - Favorites API Routes
 """
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -221,7 +221,7 @@ async def synthesize_favorites(
     ).all()
     
     if not favorites:
-        return {"synthesis": "Aucun favori à synthétiser.", "document_count": 0}
+        return {"synthesis": "No favorites to synthesize.", "document_count": 0}
     
     # Build context from favorites
     documents_context = []
@@ -231,16 +231,29 @@ async def synthesize_favorites(
             doc_info = f"**{doc.file_name}** ({doc.file_type})"
             if fav.notes:
                 doc_info += f"\n  Notes: {fav.notes}"
-            if doc.content_text:
+            if doc.text_content:
                 # Truncate content to avoid overwhelming the model
-                content_preview = doc.content_text[:2000]
-                if len(doc.content_text) > 2000:
+                content_preview = doc.text_content[:2000]
+                if len(doc.text_content) > 2000:
                     content_preview += "..."
-                doc_info += f"\n  Contenu: {content_preview}"
+                doc_info += f"\n  Content: {content_preview}"
             documents_context.append(doc_info)
     
-    # Create synthesis prompt
-    prompt = f"""Voici les {len(favorites)} documents marqués comme favoris dans cette investigation:
+    # Create synthesis prompt (bilingual)
+    locale = "en"  # Default; could be passed from frontend Accept-Language header
+    if locale == "en":
+        prompt = f"""Here are the {len(favorites)} documents marked as favorites in this investigation:
+
+{chr(10).join(documents_context)}
+
+Generate a concise synthesis of these documents:
+1. Key points and important information found
+2. Connections or links between documents
+3. Questions or leads to explore
+
+Be factual and precise."""
+    else:
+        prompt = f"""Voici les {len(favorites)} documents marqués comme favoris dans cette investigation:
 
 {chr(10).join(documents_context)}
 
@@ -250,17 +263,17 @@ Génère une synthèse concise de ces documents:
 3. Questions ou pistes à explorer
 
 Sois factuel et précis."""
-
+    
     try:
         chat_service = get_chat_service()
         response = await chat_service.chat(message=prompt, use_rag=False)
         return {
-            "synthesis": response.get("response", "Erreur de génération"),
+            "synthesis": response.get("response", "Generation error"),
             "document_count": len(favorites)
         }
     except Exception as e:
         return {
-            "synthesis": f"Erreur lors de la synthèse: {str(e)}",
+            "synthesis": f"Error during synthesis: {str(e)}",
             "document_count": len(favorites),
             "error": True
         }

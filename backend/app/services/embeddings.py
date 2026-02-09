@@ -1,15 +1,18 @@
 """
-War Room Backend - Gemini Embeddings Service
-Using Google Gemini 3.0 Flash for text embeddings
+Archon Backend - Gemini Embeddings Service
+Using Google gemini-embedding-001 for text embeddings
 """
+import logging
 import google.generativeai as genai
 from typing import List, Dict, Any
 from ..config import get_settings
 
+logger = logging.getLogger(__name__)
+
 settings = get_settings()
 
-# Gemini text-embedding-004 dimension
-EMBEDDING_DIMENSION = 768
+# Gemini gemini-embedding-001 dimension
+EMBEDDING_DIMENSION = 3072
 
 
 class EmbeddingsService:
@@ -74,24 +77,27 @@ class EmbeddingsService:
         return result['embedding']
     
     def get_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        """Get embeddings for multiple texts."""
+        """Get embeddings for multiple texts using batch API."""
         if not texts:
             return []
         
         embeddings = []
-        # Gemini supports batch embedding
-        for text in texts:
+        # Process in batches of 100 to stay within API limits
+        batch_size = 100
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
             try:
                 result = genai.embed_content(
                     model=self.model,
-                    content=text,
+                    content=batch,
                     task_type="retrieval_document"
                 )
-                embeddings.append(result['embedding'])
+                # embed_content returns a list of embeddings when given a list
+                embeddings.extend(result['embedding'])
             except Exception as e:
-                # Return zero vector on error to maintain alignment
-                embeddings.append([0.0] * EMBEDDING_DIMENSION)
-                print(f"Embedding error: {e}")
+                # Fallback: return zero vectors for this batch
+                embeddings.extend([[0.0] * EMBEDDING_DIMENSION for _ in batch])
+                logger.error("Batch embedding error: %s", e)
         
         return embeddings
     

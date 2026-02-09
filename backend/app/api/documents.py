@@ -1,5 +1,5 @@
 """
-War Room Backend - Documents API Routes
+Archon Backend - Documents API Routes
 """
 import os
 from datetime import datetime
@@ -91,10 +91,26 @@ def get_document(document_id: int, db: Session = Depends(get_db)):
 
 @router.get("/{document_id}/content")
 def get_document_content(document_id: int, db: Session = Depends(get_db)):
-    """Get document text content only."""
+    """Get document text content only. Triggers lazy OCR for videos."""
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Lazy Video OCR: trigger on first access
+    if (document.file_type == DocumentType.VIDEO 
+            and document.text_content 
+            and document.text_content.startswith("[VIDEO] OCR déféré")):
+        try:
+            from ..services.ocr import get_ocr_service
+            ocr_service = get_ocr_service()
+            text_content, used_ocr = ocr_service.extract_text(document.file_path)
+            if text_content and text_content.strip():
+                document.text_content = text_content
+                document.text_length = len(text_content)
+                document.has_ocr = 1 if used_ocr else 0
+                db.commit()
+        except Exception:
+            pass  # Return placeholder if OCR fails
     
     return {
         "document_id": document_id,
@@ -123,7 +139,8 @@ def get_document_file(document_id: int, db: Session = Depends(get_db)):
     content_types = {
         DocumentType.PDF: "application/pdf",
         DocumentType.IMAGE: None,  # Will be determined by extension
-        DocumentType.TEXT: "text/plain; charset=utf-8"
+        DocumentType.TEXT: "text/plain; charset=utf-8",
+        DocumentType.VIDEO: "video/mp4",  # Default, refined by extension below
     }
     
     content_type = content_types.get(document.file_type)
@@ -142,6 +159,20 @@ def get_document_file(document_id: int, db: Session = Depends(get_db)):
             ".tif": "image/tiff"
         }
         content_type = image_types.get(ext, "application/octet-stream")
+    
+    # For videos, determine type by extension
+    elif document.file_type == DocumentType.VIDEO:
+        ext = file_path.suffix.lower()
+        video_types = {
+            ".mp4": "video/mp4",
+            ".avi": "video/x-msvideo",
+            ".mov": "video/quicktime",
+            ".mkv": "video/x-matroska",
+            ".webm": "video/webm",
+            ".wmv": "video/x-ms-wmv",
+            ".flv": "video/x-flv",
+        }
+        content_type = video_types.get(ext, "video/mp4")
     
     return FileResponse(
         path=str(file_path),

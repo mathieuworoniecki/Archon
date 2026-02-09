@@ -3,17 +3,20 @@ Projects API endpoints.
 Projects are based on first-level directories in the documents folder.
 """
 import os
+import logging
 from pathlib import Path
 from typing import List, Optional
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
+
 from ..config import get_settings
 
 settings = get_settings()
 
-router = APIRouter(prefix="/api/projects", tags=["projects"])
+router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 class Project(BaseModel):
@@ -139,7 +142,7 @@ async def list_projects(
                     subdirectories=subdir_count
                 ))
     except (OSError, PermissionError) as e:
-        print(f"Error listing projects: {e}")
+        logger.error("Error listing projects: %s", e)
     
     return ProjectsResponse(
         projects=projects,
@@ -236,3 +239,76 @@ async def list_project_files(
         "count": len(files),
         "truncated": len(files) >= limit
     }
+
+
+@router.get("/{project_name}/stats")
+async def get_project_stats(project_name: str):
+    """
+    Get indexing statistics for a specific project.
+    Returns document counts, type breakdown, and scan info for this project only.
+    """
+    from sqlalchemy import func
+    from ..database import SessionLocal
+    from ..models import Document, Scan, ScanStatus, DocumentType
+    
+    documents_path = os.environ.get("DOCUMENTS_PATH", "/documents")
+    project_path = str(Path(documents_path) / project_name)
+    
+    db = SessionLocal()
+    try:
+        # Documents indexed for this project (file_path starts with project path)
+        total_docs = db.query(func.count(Document.id)).filter(
+            Document.file_path.like(f"{project_path}%")
+        ).scalar() or 0
+        
+        # By type
+        type_counts = db.query(
+            Document.file_type,
+            func.count(Document.id)
+        ).filter(
+            Document.file_path.like(f"{project_path}%")
+        ).group_by(Document.file_type).all()
+        
+        by_type = {"pdf": 0, "image": 0, "text": 0, "video": 0, "unknown": 0}
+        for file_type, count in type_counts:
+            if file_type == DocumentType.PDF:
+                by_type["pdf"] = count
+            elif file_type == DocumentType.IMAGE:
+                by_type["image"] = count
+            elif file_type == DocumentType.TEXT:
+                by_type["text"] = count
+            elif file_type == DocumentType.VIDEO:
+                by_type["video"] = count
+            else:
+                by_type["unknown"] = count
+        
+        # Total size indexed
+        total_size = db.query(func.sum(Document.file_size)).filter(
+            Document.file_path.like(f"{project_path}%")
+        ).scalar() or 0
+        
+        # Scans for this project
+        scans = db.query(Scan).filter(
+            Scan.path.like(f"{project_path}%")
+        ).order_by(Scan.created_at.desc()).limit(5).all()
+        
+        scan_info = [{
+            "id": s.id,
+            "status": s.status.value,
+            "total_files": s.total_files,
+            "processed_files": s.processed_files,
+            "failed_files": s.failed_files,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "completed_at": s.completed_at.isoformat() if s.completed_at else None
+        } for s in scans]
+        
+        return {
+            "project": project_name,
+            "total_documents": total_docs,
+            "documents_by_type": by_type,
+            "total_size_bytes": total_size,
+            "recent_scans": scan_info
+        }
+    finally:
+        db.close()
+

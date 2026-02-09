@@ -1,7 +1,7 @@
 """
-War Room Backend - SQLAlchemy Models
+Archon Backend - SQLAlchemy Models
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 from sqlalchemy import Column, Integer, String, Text, DateTime, Enum as SQLEnum, Float, ForeignKey
@@ -27,6 +27,8 @@ class DocumentType(str, Enum):
     PDF = "pdf"
     IMAGE = "image"
     TEXT = "text"
+    VIDEO = "video"
+    EMAIL = "email"
     UNKNOWN = "unknown"
 
 
@@ -37,6 +39,7 @@ class Scan(Base):
     id = Column(Integer, primary_key=True, index=True)
     celery_task_id = Column(String(255), unique=True, index=True)
     path = Column(String(1024), nullable=False)
+    label = Column(String(255), nullable=True)  # User-facing name, defaults to path basename
     status = Column(SQLEnum(ScanStatus), default=ScanStatus.PENDING)
     
     # Progress tracking
@@ -48,7 +51,7 @@ class Scan(Base):
     enable_embeddings = Column(Integer, default=0)  # 0 = disabled, 1 = enabled
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     
@@ -84,7 +87,7 @@ class Document(Base):
     
     # Timestamps
     file_modified_at = Column(DateTime, nullable=True)
-    indexed_at = Column(DateTime, default=datetime.utcnow)
+    indexed_at = Column(DateTime, default=datetime.now(timezone.utc))
     
     # Archive info (if extracted from an archive)
     archive_path = Column(String(1024), nullable=True)  # e.g., "archive.zip/subdir/"
@@ -125,7 +128,7 @@ class ScanError(Base):
     file_path = Column(String(1024), nullable=False)
     error_type = Column(String(255), nullable=False)
     error_message = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
     
     # Relationships
     scan = relationship("Scan", back_populates="errors")
@@ -138,7 +141,7 @@ class Tag(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False, unique=True)
     color = Column(String(7), nullable=False, default="#3b82f6")  # Hex color
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
     
     # Relationships
     favorites = relationship("Favorite", secondary="favorite_tags", back_populates="tags")
@@ -151,8 +154,8 @@ class Favorite(Base):
     id = Column(Integer, primary_key=True, index=True)
     document_id = Column(Integer, ForeignKey("documents.id"), nullable=False, unique=True)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
     
     # Relationships
     document = relationship("Document", backref="favorite")
@@ -193,6 +196,32 @@ class AuditLog(Base):
     details = Column(Text, nullable=True)  # JSON with additional info
     user_ip = Column(String(45), nullable=True)  # IPv6 compatible
     
+    # Hash chain for tamper evidence (ISO 27037)
+    entry_hash = Column(String(64), nullable=True)      # SHA256 of this entry
+    previous_hash = Column(String(64), nullable=True)    # SHA256 of previous entry
+    
     # Timestamp
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc), index=True)
 
+
+class UserRole(str, Enum):
+    """User roles for RBAC."""
+    ADMIN = "admin"
+    ANALYST = "analyst"
+    VIEWER = "viewer"
+
+
+class User(Base):
+    """User model for authentication."""
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(100), unique=True, nullable=False, index=True)
+    email = Column(String(255), unique=True, nullable=True)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(SQLEnum(UserRole), default=UserRole.ANALYST, nullable=False)
+    is_active = Column(Integer, default=1)  # 1 = active, 0 = disabled
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    last_login = Column(DateTime, nullable=True)

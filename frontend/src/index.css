@@ -2,94 +2,197 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  :root {
-    --background: 222 47% 4%;
-    --foreground: 210 40% 98%;
-    
-    --card: 222 47% 6%;
-    --card-foreground: 210 40% 98%;
-    
-    --popover: 222 47% 6%;
-    --popover-foreground: 210 40% 98%;
-    
-    --primary: 217 91% 60%;
-    --primary-foreground: 222 47% 4%;
-    
-    --secondary: 217 33% 17%;
-    --secondary-foreground: 210 40% 98%;
-    
-    --muted: 217 33% 17%;
-    --muted-foreground: 215 20% 65%;
-    
-    --accent: 217 33% 17%;
-    --accent-foreground: 210 40% 98%;
-    
-    --destructive: 0 63% 31%;
-    --destructive-foreground: 210 40% 98%;
-    
-    --border: 217 33% 17%;
-    --input: 217 33% 17%;
-    --ring: 217 91% 60%;
-    
-    --highlight: 48 96% 53%;
-    --highlight-foreground: 222 47% 4%;
-    
-    --radius: 0.5rem;
-  }
-}
+/* ═══════════════════════════════════════════════════════════════
+   ARCHON — Rui Huang Cinematic Design System v1.0
+   Atmospheric · Industrial Sci-Fi · Soft Brutalism
+   ═══════════════════════════════════════════════════════════════ */
 
 @layer base {
+  :root {
+    /* ── Rui Huang Palette (source of truth) ───────────────── */
+    --bg-deep: #0F1215;
+    --glass-surface: rgba(22, 27, 34, 0.60);
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --text-primary: #E2E8F0;
+    --text-muted: #64748B;
+    --accent-focus: #F59E0B;          /* Sunset Orange */
+    --accent-safe: #2D6A78;           /* Muted Teal   */
+
+    /* ── shadcn/ui backward-compat tokens (HSL) ────────────── */
+    --background: 216 18% 7%;         /* → #0F1215 */
+    --foreground: 214 32% 91%;        /* → #E2E8F0 */
+
+    --card: 215 19% 11%;
+    --card-foreground: 214 32% 91%;
+
+    --popover: 215 19% 11%;
+    --popover-foreground: 214 32% 91%;
+
+    --primary: 38 92% 50%;            /* → #F59E0B sunset orange */
+    --primary-foreground: 216 18% 7%;
+
+    --secondary: 192 45% 32%;         /* → #2D6A78 muted teal */
+    --secondary-foreground: 214 32% 91%;
+
+    --muted: 215 19% 14%;
+    --muted-foreground: 215 16% 47%;  /* → #64748B */
+
+    --accent: 38 92% 50%;
+    --accent-foreground: 216 18% 7%;
+
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 214 32% 91%;
+
+    --border: 215 19% 14%;
+    --input: 215 19% 14%;
+    --ring: 38 92% 50%;
+
+    --highlight: 38 92% 50%;
+    --highlight-foreground: 216 18% 7%;
+
+    --radius: 0.5rem;
+
+    /* ── Typography tokens ─────────────────────────────────── */
+    --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-data: 'Space Mono', 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  /* ── Global Base ──────────────────────────────────────────── */
   * {
     @apply border-border;
   }
-  
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
   body {
-    @apply bg-background text-foreground;
+    background-color: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-weight: 400;
+    letter-spacing: -0.01em;
     font-feature-settings: "rlig" 1, "calt" 1;
+    line-height: 1.6;
+    min-height: 100vh;
   }
 }
 
-/* Custom scrollbar */
+/* ═══════════════════════════════════════════════════════════════
+   SMOKED GLASS PANEL — Core Atmospheric Component
+   Use: .rui-glass-panel on any container
+   ═══════════════════════════════════════════════════════════════ */
+.rui-glass-panel {
+  background: linear-gradient(
+    180deg,
+    rgba(30, 41, 59, 0.4) 0%,
+    rgba(15, 23, 42, 0.6) 100%
+  );
+  backdrop-filter: blur(16px) saturate(90%);
+  -webkit-backdrop-filter: blur(16px) saturate(90%);
+
+  /* Directional light borders (top highlight, bottom shadow) */
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.4);
+  border-left: 1px solid rgba(255, 255, 255, 0.04);
+  border-right: 1px solid rgba(255, 255, 255, 0.04);
+
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+  border-radius: 8px;
+}
+
+/* Subtle hover lift for interactive glass panels */
+.rui-glass-panel-interactive {
+  composes: rui-glass-panel;
+  transition: box-shadow 0.3s ease, transform 0.3s ease, border-color 0.3s ease;
+}
+
+.rui-glass-panel-interactive:hover {
+  box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.5),
+              0 0 0 1px rgba(245, 158, 11, 0.15);
+  transform: translateY(-1px);
+  border-top-color: rgba(245, 158, 11, 0.2);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   DATA TYPOGRAPHY — Space Mono for technical readouts
+   ═══════════════════════════════════════════════════════════════ */
+.font-data {
+  font-family: var(--font-data);
+  text-transform: uppercase;
+  font-size: 0.85rem;
+  letter-spacing: 0.05em;
+  font-weight: 400;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   HUD ACCENT GLOW — Cinematic focus indication
+   ═══════════════════════════════════════════════════════════════ */
+@keyframes ambient-glow {
+  0%, 100% {
+    box-shadow: 0 0 6px rgba(245, 158, 11, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 24px rgba(245, 158, 11, 0.3);
+  }
+}
+
+.hud-glow {
+  animation: ambient-glow 3s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SCROLLBAR — Muted industrial feel
+   ═══════════════════════════════════════════════════════════════ */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: hsl(var(--muted));
-  border-radius: 4px;
+  background: rgba(15, 18, 21, 0.6);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--border));
-  border-radius: 4px;
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--primary));
+  background: var(--accent-focus);
 }
 
-/* Highlight styling for search results */
+/* ═══════════════════════════════════════════════════════════════
+   SEARCH HIGHLIGHT
+   ═══════════════════════════════════════════════════════════════ */
 mark {
-  background-color: hsl(var(--highlight));
-  color: hsl(var(--highlight-foreground));
+  background-color: rgba(245, 158, 11, 0.25);
+  color: var(--text-primary);
   padding: 0 2px;
   border-radius: 2px;
+  border-bottom: 1px solid var(--accent-focus);
 }
 
-/* Panel resize handle */
+/* ═══════════════════════════════════════════════════════════════
+   PANEL RESIZE HANDLE
+   ═══════════════════════════════════════════════════════════════ */
 [data-panel-group-direction="horizontal"] > [data-panel-resize-handle-enabled] {
   width: 4px !important;
-  background: hsl(var(--border));
-  transition: background 0.2s;
+  background: rgba(255, 255, 255, 0.06);
+  transition: background 0.3s ease;
 }
 
-[data-panel-group-direction="horizontal"] > [data-panel-resize-handle-enabled]:hover {
-  background: hsl(var(--primary));
+[data-panel-group-direction="horizontal"]
+  > [data-panel-resize-handle-enabled]:hover {
+  background: var(--accent-focus);
 }
 
-/* PDF viewer container */
+/* ═══════════════════════════════════════════════════════════════
+   PDF VIEWER CONTAINER
+   ═══════════════════════════════════════════════════════════════ */
 .pdf-container {
   @apply w-full h-full overflow-auto;
 }
@@ -98,7 +201,9 @@ mark {
   @apply mx-auto;
 }
 
-/* Loading animation */
+/* ═══════════════════════════════════════════════════════════════
+   LOADING SHIMMER — Atmospheric version
+   ═══════════════════════════════════════════════════════════════ */
 @keyframes shimmer {
   0% {
     background-position: -200% 0;
@@ -111,10 +216,95 @@ mark {
 .shimmer {
   background: linear-gradient(
     90deg,
-    hsl(var(--muted)) 25%,
-    hsl(var(--border)) 50%,
-    hsl(var(--muted)) 75%
+    rgba(15, 18, 21, 0.8) 25%,
+    rgba(30, 41, 59, 0.5) 50%,
+    rgba(15, 18, 21, 0.8) 75%
   );
   background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FOCUS STATES — Sunset orange ring
+   ═══════════════════════════════════════════════════════════════ */
+:focus-visible {
+  outline: 2px solid var(--accent-focus);
+  outline-offset: 2px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RETRO-FUTURISTIC HUD LAYER — Macross / 80s Mecha Cockpit
+   Opt-in utilities for that analog-digital crossover feel
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Scan-line overlay — subtle CRT texture */
+.hud-scanlines {
+  position: relative;
+}
+
+.hud-scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.08) 2px,
+    rgba(0, 0, 0, 0.08) 4px
+  );
+  z-index: 1;
+  border-radius: inherit;
+}
+
+/* HUD Corner Brackets — angular targeting reticle on containers */
+.hud-bracket {
+  position: relative;
+}
+
+/* Don't override fixed-positioned elements (modals, dialogs) */
+.hud-bracket.fixed,
+.hud-bracket[data-state] {
+  position: fixed;
+}
+
+.hud-bracket::before,
+.hud-bracket::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.hud-bracket::before {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid var(--accent-focus);
+  border-left: 2px solid var(--accent-focus);
+}
+
+.hud-bracket::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 2px solid var(--accent-focus);
+  border-right: 2px solid var(--accent-focus);
+}
+
+/* CRT text glow — neon bleed on data readouts */
+.hud-text-glow {
+  text-shadow:
+    0 0 4px rgba(245, 158, 11, 0.4),
+    0 0 12px rgba(245, 158, 11, 0.15);
+}
+
+/* Retro wireframe grid background — for hero/empty-state areas */
+.retro-grid {
+  background-image:
+    linear-gradient(rgba(245, 158, 11, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(245, 158, 11, 0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+  background-position: center center;
 }

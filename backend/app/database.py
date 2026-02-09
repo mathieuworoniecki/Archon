@@ -1,7 +1,4 @@
-"""
-War Room Backend - Database Session
-"""
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 from .config import get_settings
@@ -24,9 +21,43 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _run_migrations():
+    """Run lightweight schema migrations (add missing columns)."""
+    migrations = [
+        ("documents", "archive_path", "ALTER TABLE documents ADD COLUMN archive_path VARCHAR(1024)"),
+        ("documents", "hash_md5", "ALTER TABLE documents ADD COLUMN hash_md5 VARCHAR(32)"),
+        ("documents", "hash_sha256", "ALTER TABLE documents ADD COLUMN hash_sha256 VARCHAR(64)"),
+        ("audit_logs", "entry_hash", "ALTER TABLE audit_logs ADD COLUMN entry_hash VARCHAR(64)"),
+        ("audit_logs", "previous_hash", "ALTER TABLE audit_logs ADD COLUMN previous_hash VARCHAR(64)"),
+    ]
+    
+    with engine.connect() as conn:
+        is_sqlite = "sqlite" in str(engine.url)
+        
+        for table, column, ddl in migrations:
+            try:
+                if is_sqlite:
+                    result = conn.execute(text(f"PRAGMA table_info({table})"))
+                    cols = [row[1] for row in result]
+                else:
+                    # PostgreSQL / other ANSI-SQL databases
+                    result = conn.execute(text(
+                        "SELECT column_name FROM information_schema.columns "
+                        f"WHERE table_name = '{table}'"
+                    ))
+                    cols = [row[0] for row in result]
+                
+                if column not in cols:
+                    conn.execute(text(ddl))
+                    conn.commit()
+            except Exception:
+                pass  # Column already exists
+
+
 def init_db():
     """Initialize database tables."""
     Base.metadata.create_all(bind=engine)
+    _run_migrations()
 
 
 def get_db():

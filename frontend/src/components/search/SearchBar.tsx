@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { API_BASE } from '@/lib/api'
+import { useTranslation } from '@/contexts/I18nContext'
+import { useProject } from '@/contexts/ProjectContext'
 
 interface Project {
     name: string
@@ -29,14 +31,26 @@ export function SearchBar({ onSearch, isLoading, disabled }: SearchBarProps) {
     const [semanticWeight, setSemanticWeight] = useState(0.5)
     const [projects, setProjects] = useState<Project[]>([])
     const [selectedProject, setSelectedProject] = useState<string>('__all__')
+    const { t } = useTranslation()
+    const { selectedProject: contextProject } = useProject()
 
     // Fetch projects on mount
     useEffect(() => {
         fetch(`${API_BASE}/projects/`)
             .then(res => res.json())
-            .then(data => setProjects(data.projects || []))
+            .then(data => {
+                const projectsList = data.projects || []
+                setProjects(projectsList)
+                // Auto-select current project from context
+                if (contextProject) {
+                    const match = projectsList.find((p: Project) => p.name === contextProject.name)
+                    if (match) {
+                        setSelectedProject(match.path)
+                    }
+                }
+            })
             .catch(console.error)
-    }, [])
+    }, [contextProject])
 
     const handleSubmit = (e: FormEvent) => {
         e.preventDefault()
@@ -47,23 +61,23 @@ export function SearchBar({ onSearch, isLoading, disabled }: SearchBarProps) {
     }
 
     const modes = [
-        { value: 0, icon: Zap, label: 'Mots-clés', description: 'Recherche exacte' },
-        { value: 0.5, icon: Search, label: 'Hybride', description: 'Meilleur des deux' },
-        { value: 1, icon: Sparkles, label: 'Sémantique', description: 'Recherche IA' },
+        { value: 0, icon: Zap, label: t('searchBar.keywords'), description: t('searchBar.keywordsDesc') },
+        { value: 0.5, icon: Search, label: t('searchBar.hybrid'), description: t('searchBar.hybridDesc') },
+        { value: 1, icon: Sparkles, label: t('searchBar.semantic'), description: t('searchBar.semanticDesc') },
     ]
 
     return (
         <div className="space-y-3">
             <form onSubmit={handleSubmit} className="flex gap-2">
-                {/* Project Selector */}
-                {projects.length > 0 && (
+                {/* Project Selector — hidden when only current project exists */}
+                {projects.length > 1 && (
                     <Select value={selectedProject} onValueChange={setSelectedProject}>
                         <SelectTrigger className="w-48 h-12">
                             <FolderOpen className="h-4 w-4 mr-2 text-muted-foreground" />
-                            <SelectValue placeholder="Tous les projets" />
+                            <SelectValue placeholder={t('searchBar.allProjects')} />
                         </SelectTrigger>
                         <SelectContent>
-                            <SelectItem value="__all__">Tous les projets</SelectItem>
+                            <SelectItem value="__all__">{t('searchBar.allProjects')}</SelectItem>
                             {projects.map(p => (
                                 <SelectItem key={p.path} value={p.path}>
                                     {p.name} ({p.file_count})
@@ -76,8 +90,9 @@ export function SearchBar({ onSearch, isLoading, disabled }: SearchBarProps) {
                 <div className="relative flex-1">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
-                        type="text"
-                        placeholder="Rechercher dans les documents..."
+                        type="search"
+                        data-search
+                        placeholder={t('searchBar.placeholder')}
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         className="pl-10 h-12 text-base bg-card border-border"
@@ -88,7 +103,7 @@ export function SearchBar({ onSearch, isLoading, disabled }: SearchBarProps) {
                     {isLoading ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
-                        'Rechercher'
+                        t('searchBar.search')
                     )}
                 </Button>
             </form>

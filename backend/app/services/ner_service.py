@@ -1,5 +1,5 @@
 """
-War Room Backend - NER Service
+Archon Backend - NER Service
 Named Entity Recognition using SpaCy
 """
 import logging

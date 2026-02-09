@@ -3,6 +3,7 @@ import { useCockpit } from '@/contexts/CockpitContext'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { EntityFilter } from '@/components/entities/EntityFilter'
+import { TimelineHeatmap } from '@/components/timeline/TimelineHeatmap'
 import { cn } from '@/lib/utils'
 import { FileType } from '@/lib/api'
 
@@ -14,6 +15,7 @@ interface FilterPanelProps {
 const FILE_TYPE_OPTIONS = [
     { value: 'pdf', label: 'PDF' },
     { value: 'image', label: 'Images' },
+    { value: 'video', label: 'Vidéos' },
     { value: 'text', label: 'Texte' },
 ]
 
@@ -129,6 +131,14 @@ export function FilterPanel({ className, onSearch }: FilterPanelProps) {
                     onEntitySelect={handleEntitySelect}
                     selectedEntity={filters.selectedEntity}
                 />
+            </div>
+
+            {/* Compact Timeline */}
+            <div className="p-3 border-t">
+                <label className="text-xs font-medium text-muted-foreground mb-2 block">
+                    Timeline
+                </label>
+                <TimelineHeatmap className="max-h-20" />
             </div>
         </div>
     )

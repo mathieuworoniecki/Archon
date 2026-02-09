@@ -1,7 +1,6 @@
 """
-War Room Backend - Configuration
+Archon Backend - Configuration
 """
-import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from functools import lru_cache
@@ -11,12 +10,12 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
     # App
-    app_name: str = "War Room"
+    app_name: str = "Archon"
     debug: bool = True
     
     # Gemini AI
     gemini_api_key: str = ""
-    embedding_model: str = "models/text-embedding-004"
+    embedding_model: str = "models/gemini-embedding-001"
     
     # Redis
     redis_url: str = "redis://localhost:6379/0"
@@ -40,6 +39,14 @@ class Settings(BaseSettings):
     
     # Tesseract
     tesseract_cmd: str = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    
+    # JWT Authentication
+    jwt_secret_key: str = "archon-change-me-in-production-use-a-long-random-string"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 30
+    
+    # Dev: disable auth entirely (DISABLE_AUTH=true in .env)
+    disable_auth: bool = False
     
     # Paths
     @property

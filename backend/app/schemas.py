@@ -1,5 +1,5 @@
 """
-War Room Backend - Pydantic Schemas
+Archon Backend - Pydantic Schemas
 """
 from datetime import datetime
 from typing import Optional, List
@@ -29,6 +29,19 @@ class ScanProgress(BaseModel):
     failed_files: int
     current_file: Optional[str] = None
     progress_percent: float = 0.0
+    # Phase tracking
+    phase: str = "idle"  # idle|detection|processing|indexing|embedding|complete
+    # Performance metrics
+    files_per_second: float = 0.0
+    eta_seconds: Optional[int] = None
+    elapsed_seconds: int = 0
+    # File type breakdown
+    type_counts: Optional[dict] = None  # {"pdf": 42, "image": 120, ...}
+    # Activity feed
+    recent_files: List[str] = []  # Last 5 processed file names
+    current_file_type: Optional[str] = None
+    # Incremental scan info
+    skipped_files: int = 0
 
 
 class ScanErrorOut(BaseModel):
@@ -48,10 +61,12 @@ class ScanOut(BaseModel):
     id: int
     celery_task_id: Optional[str]
     path: str
+    label: Optional[str] = None
     status: ScanStatus
     total_files: int
     processed_files: int
     failed_files: int
+    enable_embeddings: bool = False
     created_at: datetime
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
@@ -113,6 +128,9 @@ class SearchQuery(BaseModel):
     project_path: Optional[str] = Field(None, description="Filter by project path prefix")
     date_from: Optional[datetime] = None
     date_to: Optional[datetime] = None
+    size_min: Optional[int] = Field(None, ge=0, description="Minimum file size in bytes")
+    size_max: Optional[int] = Field(None, ge=0, description="Maximum file size in bytes")
+    entity_names: Optional[List[str]] = Field(None, description="Filter by entity names (NER)")
     
     # Search mode
     semantic_weight: float = Field(0.5, ge=0, le=1, description="Weight for semantic search (0=keyword only, 1=semantic only)")
@@ -143,12 +161,21 @@ class SearchResult(BaseModel):
     qdrant_rank: Optional[int] = None
 
 
+class SearchFacets(BaseModel):
+    """Available facet values for filtering."""
+    file_types: List[dict] = []   # [{"value": "PDF", "count": 42}]
+    size_ranges: List[dict] = []  # [{"label": "< 1 MB", "min": 0, "max": 1048576, "count": 10}]
+    date_range: Optional[dict] = None  # {"min": "2020-01-01", "max": "2024-12-31"}
+    top_entities: List[dict] = []  # [{"name": "John Doe", "type": "PERSON", "count": 15}]
+
+
 class SearchResponse(BaseModel):
     """Schema for search response."""
     query: str
     total_results: int
     results: List[SearchResult]
     processing_time_ms: float
+    facets: Optional[SearchFacets] = None
 
 
 # =============================================================================
@@ -164,6 +191,7 @@ class DocumentsByType(BaseModel):
     pdf: int = 0
     image: int = 0
     text: int = 0
+    video: int = 0
     unknown: int = 0
 
 

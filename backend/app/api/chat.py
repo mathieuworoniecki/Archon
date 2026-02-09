@@ -1,17 +1,23 @@
 """
 AI Chat API endpoints.
+Session-based: each browser tab gets its own isolated conversation history.
 """
+import logging
+import json
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Document
-from ..services.ai_chat import get_chat_service
+from ..services.ai_chat import get_chat_service, clear_session
+from ..utils.rate_limiter import chat_limiter, document_ai_limiter
 
+logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/chat", tags=["chat"])
+router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 class ChatRequest(BaseModel):
@@ -37,33 +43,79 @@ class QuestionRequest(BaseModel):
     question: str
 
 
+def _get_session_id(x_session_id: Optional[str] = Header(None)) -> str:
+    """Extract session ID from request header, fallback to 'default'."""
+    return x_session_id or "default"
+
+
 @router.post("/", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(
+    request: Request,
+    body: ChatRequest,
+    session_id: str = Depends(_get_session_id)
+):
     """
     Send a message to the AI assistant with optional RAG.
-    The assistant will retrieve relevant document context and generate a response.
+    Session isolated via X-Session-Id header. Rate limited.
     """
-    chat_service = get_chat_service()
+    chat_limiter.check(request)
+    chat_service = get_chat_service(session_id)
     
     result = await chat_service.chat(
-        message=request.message,
-        use_rag=request.use_rag,
-        context_limit=request.context_limit,
-        include_history=request.include_history
+        message=body.message,
+        use_rag=body.use_rag,
+        context_limit=body.context_limit,
+        include_history=body.include_history
     )
     
     return result
 
 
+@router.post("/stream")
+async def chat_stream(
+    request: Request,
+    body: ChatRequest,
+    session_id: str = Depends(_get_session_id)
+):
+    """
+    Stream chat response via SSE. Each event is a JSON object:
+    - {"token": "text chunk"} for partial responses
+    - {"done": true, "contexts": [...]} when complete
+    """
+    chat_limiter.check(request)
+    chat_service = get_chat_service(session_id)
+
+    async def event_generator():
+        async for chunk in chat_service.stream_chat(
+            message=body.message,
+            use_rag=body.use_rag,
+            context_limit=body.context_limit,
+            include_history=body.include_history
+        ):
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
 @router.post("/summarize")
 async def summarize_document(
-    request: SummarizeRequest,
+    request: Request,
+    body: SummarizeRequest,
     db: Session = Depends(get_db)
 ):
     """
-    Generate a summary of a specific document.
+    Generate a summary of a specific document. Rate limited.
     """
-    document = db.query(Document).filter(Document.id == request.document_id).first()
+    document_ai_limiter.check(request)
+    document = db.query(Document).filter(Document.id == body.document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -85,13 +137,15 @@ async def summarize_document(
 
 @router.post("/question")
 async def ask_question_about_document(
-    request: QuestionRequest,
+    request: Request,
+    body: QuestionRequest,
     db: Session = Depends(get_db)
 ):
     """
-    Ask a specific question about a document.
+    Ask a specific question about a document. Rate limited.
     """
-    document = db.query(Document).filter(Document.id == request.document_id).first()
+    document_ai_limiter.check(request)
+    document = db.query(Document).filter(Document.id == body.document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -100,7 +154,7 @@ async def ask_question_about_document(
     
     chat_service = get_chat_service()
     answer = await chat_service.answer_about_document(
-        question=request.question,
+        question=body.question,
         document_text=document.text_content,
         document_name=document.file_name
     )
@@ -108,17 +162,17 @@ async def ask_question_about_document(
     return {
         "document_id": document.id,
         "document_name": document.file_name,
-        "question": request.question,
+        "question": body.question,
         "answer": answer
     }
 
 
 @router.get("/history")
-async def get_chat_history():
+async def get_chat_history(session_id: str = Depends(_get_session_id)):
     """
-    Get the current conversation history.
+    Get the conversation history for this session.
     """
-    chat_service = get_chat_service()
+    chat_service = get_chat_service(session_id)
     return {
         "messages": chat_service.get_history(),
         "count": len(chat_service.conversation_history)
@@ -126,10 +180,9 @@ async def get_chat_history():
 
 
 @router.post("/clear")
-async def clear_chat_history():
+async def clear_chat_history(session_id: str = Depends(_get_session_id)):
     """
-    Clear the conversation history.
+    Clear the conversation history for this session.
     """
-    chat_service = get_chat_service()
-    chat_service.clear_history()
+    clear_session(session_id)
     return {"status": "cleared"}

@@ -1,15 +1,15 @@
 """
-War Room Backend - Timeline API Routes
+Archon Backend - Timeline API Routes
 Provides date aggregation for timeline visualization
 """
-from datetime import datetime, date, timedelta
+from datetime import date
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, extract, cast, Date
+from sqlalchemy import func, cast, Date
 
 from ..database import get_db
-from ..models import Document, DocumentType
+from ..models import Document
 from pydantic import BaseModel
 
 
@@ -50,68 +50,81 @@ def get_timeline_aggregation(
     - year: Each year
     
     Returns a list of data points with counts and breakdown by file type.
+    Uses SQL-level aggregation to handle millions of documents efficiently.
     """
-    query = db.query(Document).filter(Document.file_modified_at.isnot(None))
+    # Build SQLite strftime format based on granularity
+    granularity_formats = {
+        "day": "%Y-%m-%d",
+        "week": "%Y-W%W",
+        "month": "%Y-%m",
+        "year": "%Y",
+    }
+    date_format = granularity_formats[granularity]
     
-    # Apply filters
+    # SQLite-compatible date grouping using func.strftime
+    date_key = func.strftime(date_format, Document.file_modified_at).label("date_key")
+    
+    # Base filter conditions
+    base_filters = [Document.file_modified_at.isnot(None)]
     if scan_id:
-        query = query.filter(Document.scan_id == scan_id)
+        base_filters.append(Document.scan_id == scan_id)
     if date_from:
-        query = query.filter(cast(Document.file_modified_at, Date) >= date_from)
+        base_filters.append(cast(Document.file_modified_at, Date) >= date_from)
     if date_to:
-        query = query.filter(cast(Document.file_modified_at, Date) <= date_to)
+        base_filters.append(cast(Document.file_modified_at, Date) <= date_to)
     
-    # Get all matching documents
-    documents = query.all()
+    # Query 1: Get total count per date bucket
+    totals_query = (
+        db.query(
+            date_key,
+            func.count(Document.id).label("count")
+        )
+        .filter(*base_filters)
+        .group_by("date_key")
+        .order_by("date_key")
+        .all()
+    )
     
-    # Aggregate by date
-    aggregation = {}
+    # Query 2: Get count per date bucket + file type breakdown
+    type_query = (
+        db.query(
+            func.strftime(date_format, Document.file_modified_at).label("date_key"),
+            Document.file_type,
+            func.count(Document.id).label("type_count")
+        )
+        .filter(*base_filters)
+        .group_by("date_key", Document.file_type)
+        .all()
+    )
     
-    for doc in documents:
-        if not doc.file_modified_at:
-            continue
-            
-        # Determine the grouping key based on granularity
-        dt = doc.file_modified_at
-        
-        if granularity == "day":
-            key = dt.strftime("%Y-%m-%d")
-        elif granularity == "week":
-            # ISO week: year + week number
-            key = f"{dt.isocalendar()[0]}-W{dt.isocalendar()[1]:02d}"
-        elif granularity == "month":
-            key = dt.strftime("%Y-%m")
-        else:  # year
-            key = str(dt.year)
-        
-        if key not in aggregation:
-            aggregation[key] = {"count": 0, "by_type": {}}
-        
-        aggregation[key]["count"] += 1
-        
-        # Count by file type
-        file_type = doc.file_type.value if doc.file_type else "unknown"
-        if file_type not in aggregation[key]["by_type"]:
-            aggregation[key]["by_type"][file_type] = 0
-        aggregation[key]["by_type"][file_type] += 1
+    # Build by_type lookup: {date_key: {file_type: count}}
+    by_type_map = {}
+    for row in type_query:
+        key = row.date_key
+        file_type = row.file_type.value if row.file_type else "unknown"
+        if key not in by_type_map:
+            by_type_map[key] = {}
+        by_type_map[key][file_type] = row.type_count
     
-    # Convert to sorted list
+    # Assemble response
+    total_documents = sum(r.count for r in totals_query)
     data = [
         TimelineDataPoint(
-            date=key,
-            count=val["count"],
-            by_type=val["by_type"]
+            date=r.date_key,
+            count=r.count,
+            by_type=by_type_map.get(r.date_key, {})
         )
-        for key, val in sorted(aggregation.items())
+        for r in totals_query
     ]
     
     return TimelineResponse(
         granularity=granularity,
         date_from=date_from.isoformat() if date_from else None,
         date_to=date_to.isoformat() if date_to else None,
-        total_documents=len(documents),
+        total_documents=total_documents,
         data=data
     )
+
 
 
 @router.get("/range")

@@ -1,15 +1,18 @@
 """
-War Room Backend - Hybrid Search API Routes
+Archon Backend - Hybrid Search API Routes
 Combines Meilisearch (full-text) and Qdrant (semantic) with Reciprocal Rank Fusion
 """
 import time
+import logging
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+logger = logging.getLogger(__name__)
+
 from ..database import get_db
-from ..models import Document, DocumentType
-from ..schemas import SearchQuery, SearchResult, SearchResponse, SearchHighlight
+from ..models import Document, DocumentType, Entity
+from ..schemas import SearchQuery, SearchResult, SearchResponse, SearchHighlight, SearchFacets
 from ..services.meilisearch import get_meilisearch_service
 from ..services.qdrant import get_qdrant_service
 from ..services.embeddings import get_embeddings_service
@@ -146,7 +149,7 @@ async def hybrid_search(
             meilisearch_results = meili_response.get("hits", [])
         except Exception as e:
             # Log but continue with Qdrant
-            print(f"Meilisearch error: {e}")
+            logger.error("Meilisearch error: %s", e)
     
     # Qdrant search (if weight > 0 and Gemini key configured)
     if query.semantic_weight > 0 and settings.gemini_api_key:
@@ -166,7 +169,7 @@ async def hybrid_search(
             )
         except Exception as e:
             # Log but continue with Meilisearch results
-            print(f"Qdrant error: {e}")
+            logger.error("Qdrant error: %s", e)
     
     # Fuse results using RRF
     if meilisearch_results and qdrant_results:
@@ -216,6 +219,27 @@ async def hybrid_search(
     else:
         fused_results = []
     
+    # Apply SQL post-filtering for fields not handled by engines
+    doc_ids = [r["document_id"] for r in fused_results]
+    if doc_ids and (query.size_min is not None or query.size_max is not None
+                     or query.date_from or query.date_to or query.entity_names):
+        # Build a filter query
+        filter_q = db.query(Document.id).filter(Document.id.in_(doc_ids))
+        
+        if query.size_min is not None:
+            filter_q = filter_q.filter(Document.file_size >= query.size_min)
+        if query.size_max is not None:
+            filter_q = filter_q.filter(Document.file_size <= query.size_max)
+        if query.date_from:
+            filter_q = filter_q.filter(Document.file_modified_at >= query.date_from)
+        if query.date_to:
+            filter_q = filter_q.filter(Document.file_modified_at <= query.date_to)
+        if query.entity_names:
+            filter_q = filter_q.join(Entity).filter(Entity.text.in_(query.entity_names))
+        
+        valid_ids = {row[0] for row in filter_q.all()}
+        fused_results = [r for r in fused_results if r["document_id"] in valid_ids]
+    
     # Apply pagination
     paginated_results = fused_results[query.offset:query.offset + query.limit]
     
@@ -244,6 +268,99 @@ async def hybrid_search(
         total_results=len(fused_results),
         results=results,
         processing_time_ms=processing_time
+    )
+
+
+@router.get("/facets")
+async def get_search_facets(
+    scan_id: Optional[int] = Query(None, description="Filter facets by scan"),
+    project_path: Optional[str] = Query(None, description="Filter facets by project"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get available facet values for search filtering.
+    Returns file type counts, size distribution, date range, and top entities.
+    """
+    from sqlalchemy import func
+    
+    base_q = db.query(Document)
+    if scan_id:
+        base_q = base_q.filter(Document.scan_id == scan_id)
+    if project_path:
+        base_q = base_q.filter(Document.file_path.like(f"{project_path}%"))
+    
+    # File type counts
+    type_counts = (
+        base_q.with_entities(Document.file_type, func.count(Document.id))
+        .group_by(Document.file_type)
+        .all()
+    )
+    file_types = [
+        {"value": ft.value if hasattr(ft, 'value') else str(ft), "count": count}
+        for ft, count in type_counts
+    ]
+    
+    # Size distribution
+    MB = 1024 * 1024
+    size_ranges_def = [
+        ("< 100 KB", 0, 100 * 1024),
+        ("100 KB – 1 MB", 100 * 1024, MB),
+        ("1 – 10 MB", MB, 10 * MB),
+        ("10 – 100 MB", 10 * MB, 100 * MB),
+        ("> 100 MB", 100 * MB, None),
+    ]
+    size_ranges = []
+    for label, min_val, max_val in size_ranges_def:
+        sq = base_q.filter(Document.file_size >= min_val)
+        if max_val is not None:
+            sq = sq.filter(Document.file_size < max_val)
+        count = sq.count()
+        if count > 0:
+            size_ranges.append({
+                "label": label,
+                "min": min_val,
+                "max": max_val,
+                "count": count
+            })
+    
+    # Date range
+    date_min = base_q.with_entities(func.min(Document.file_modified_at)).scalar()
+    date_max = base_q.with_entities(func.max(Document.file_modified_at)).scalar()
+    date_range = None
+    if date_min and date_max:
+        date_range = {
+            "min": date_min.isoformat(),
+            "max": date_max.isoformat()
+        }
+    
+    # Top entities (top 20 by occurrence)
+    entity_q = db.query(
+        Entity.text,
+        Entity.type,
+        func.sum(Entity.count).label("total")
+    )
+    if scan_id:
+        entity_q = entity_q.join(Document).filter(Document.scan_id == scan_id)
+    if project_path:
+        entity_q = entity_q.join(Document).filter(Document.file_path.like(f"{project_path}%"))
+    
+    top_entities = (
+        entity_q
+        .group_by(Entity.text, Entity.type)
+        .order_by(func.sum(Entity.count).desc())
+        .limit(20)
+        .all()
+    )
+    entities = [
+        {"name": text, "type": etype, "count": int(total)}
+        for text, etype, total in top_entities
+    ]
+    
+    return SearchFacets(
+        file_types=file_types,
+        size_ranges=size_ranges,
+        date_range=date_range,
+        top_entities=entities
     )
 
 

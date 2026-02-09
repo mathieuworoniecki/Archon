@@ -1,4 +1,5 @@
 import { useCallback, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { CockpitProvider, useCockpit } from '@/contexts/CockpitContext'
 import { FilterPanel } from '@/components/cockpit/FilterPanel'
 import { MetadataBar } from '@/components/cockpit/MetadataBar'
@@ -6,6 +7,7 @@ import { ResultList } from '@/components/search/ResultList'
 import { DocumentViewer } from '@/components/viewer/DocumentViewer'
 import { useSearch } from '@/hooks/useSearch'
 import { SearchResult } from '@/lib/api'
+import { useTranslation } from '@/contexts/I18nContext'
 
 function CockpitContent() {
     const {
@@ -14,7 +16,24 @@ function CockpitContent() {
         setSelectedDocument,
         setResults,
         setLoading,
+        updateFilters,
     } = useCockpit()
+
+    const [searchParams] = useSearchParams()
+    const { t } = useTranslation()
+
+    // Pre-fill date filter from URL ?date=YYYY-MM
+    useEffect(() => {
+        const dateParam = searchParams.get('date')
+        if (dateParam) {
+            const [year, month] = dateParam.split('-').map(Number)
+            if (year && month) {
+                const from = new Date(year, month - 1, 1)
+                const to = new Date(year, month, 0) // last day of month
+                updateFilters({ dateRange: { from, to } })
+            }
+        }
+    }, [searchParams, updateFilters])
 
     const { 
         results: searchResults, 
@@ -76,8 +95,8 @@ function CockpitContent() {
                     ) : (
                         <div className="flex-1 flex items-center justify-center text-muted-foreground">
                             <div className="text-center">
-                                <p className="text-lg">Aucun document sélectionné</p>
-                                <p className="text-sm mt-1">Cliquez sur un résultat pour l'afficher</p>
+                                <p className="text-lg">{t('cockpit.noDocument')}</p>
+                                <p className="text-sm mt-1">{t('cockpit.clickToView')}</p>
                             </div>
                         </div>
                     )}

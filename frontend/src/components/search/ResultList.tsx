@@ -1,7 +1,12 @@
-import { SearchResult } from '@/lib/api'
+import { useState, useCallback } from 'react'
+import { SearchResult, addFavorite } from '@/lib/api'
 import { ResultCard } from './ResultCard'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { FileSearch, Clock } from 'lucide-react'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Button } from '@/components/ui/button'
+import { FileSearch, Clock, Star, Download, X, CheckSquare, FileText } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { ResultCardSkeleton } from '@/components/ui/skeleton'
 
 interface ResultListProps {
     results: SearchResult[]
@@ -20,15 +25,80 @@ export function ResultList({
     processingTime,
     isLoading
 }: ResultListProps) {
+    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+    const [isExporting, setIsExporting] = useState(false)
+    const [isAddingFavorites, setIsAddingFavorites] = useState(false)
+
+    const toggleSelection = useCallback((id: number, e: React.MouseEvent) => {
+        e.stopPropagation()
+        setSelectedIds(prev => {
+            const next = new Set(prev)
+            if (next.has(id)) {
+                next.delete(id)
+            } else {
+                next.add(id)
+            }
+            return next
+        })
+    }, [])
+
+    const selectAll = useCallback(() => {
+        setSelectedIds(new Set(results.map(r => r.document_id)))
+    }, [results])
+
+    const clearSelection = useCallback(() => {
+        setSelectedIds(new Set())
+    }, [])
+
+    const handleBatchFavorite = useCallback(async () => {
+        if (selectedIds.size === 0) return
+        setIsAddingFavorites(true)
+        try {
+            await Promise.all(
+                Array.from(selectedIds).map(id => addFavorite(id))
+            )
+            clearSelection()
+        } catch (error) {
+            console.error('Failed to add favorites:', error)
+        } finally {
+            setIsAddingFavorites(false)
+        }
+    }, [selectedIds, clearSelection])
+
+    const handleBatchExport = useCallback(async () => {
+        if (selectedIds.size === 0) return
+        setIsExporting(true)
+        try {
+            // Export selected results as CSV
+            const selectedResults = results.filter(r => selectedIds.has(r.document_id))
+            const csvContent = [
+                ['ID', 'Fichier', 'Chemin', 'Type', 'Score'].join(','),
+                ...selectedResults.map(r => [
+                    r.document_id,
+                    `"${r.file_name}"`,
+                    `"${r.file_path}"`,
+                    r.file_type,
+                    r.score?.toFixed(3) || ''
+                ].join(','))
+            ].join('\n')
+            
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+            const url = URL.createObjectURL(blob)
+            const link = document.createElement('a')
+            link.href = url
+            link.download = `archon-export-${new Date().toISOString().slice(0, 10)}.csv`
+            link.click()
+            URL.revokeObjectURL(url)
+        } finally {
+            setIsExporting(false)
+        }
+    }, [selectedIds, results])
+
     if (isLoading) {
         return (
             <div className="space-y-3 p-4">
-                {[1, 2, 3].map((i) => (
-                    <div key={i} className="rounded-lg border p-4 space-y-2">
-                        <div className="h-4 w-1/3 shimmer rounded" />
-                        <div className="h-3 w-full shimmer rounded" />
-                        <div className="h-3 w-2/3 shimmer rounded" />
-                    </div>
+                {[1, 2, 3, 4, 5].map((i) => (
+                    <ResultCardSkeleton key={i} />
                 ))}
             </div>
         )
@@ -44,27 +114,128 @@ export function ResultList({
         )
     }
 
+    const hasSelection = selectedIds.size > 0
+
     return (
         <div className="flex flex-col h-full">
-            {/* Stats bar */}
-            <div className="flex items-center justify-between px-4 py-2 border-b text-sm text-muted-foreground">
-                <span>{totalResults} résultat{totalResults > 1 ? 's' : ''}</span>
-                <span className="flex items-center gap-1">
+            {/* Stats bar + Selection controls */}
+            <div className="flex items-center justify-between px-4 py-2 border-b text-sm">
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={hasSelection ? clearSelection : selectAll}
+                        className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        <CheckSquare className="h-4 w-4" />
+                        {hasSelection ? 'Désélectionner' : 'Tout sélectionner'}
+                    </button>
+                    <span className="text-muted-foreground">
+                        {totalResults} résultat{totalResults > 1 ? 's' : ''}
+                    </span>
+                </div>
+                <span className="flex items-center gap-1 text-muted-foreground">
                     <Clock className="h-3 w-3" />
                     {processingTime.toFixed(0)}ms
                 </span>
             </div>
 
+            {/* Batch Action Bar */}
+            {hasSelection && (
+                <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 border-b">
+                    <span className="text-sm font-medium">
+                        {selectedIds.size} sélectionné{selectedIds.size > 1 ? 's' : ''}
+                    </span>
+                    <div className="flex-1" />
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={handleBatchFavorite}
+                        disabled={isAddingFavorites}
+                        className="gap-1.5"
+                    >
+                        <Star className="h-4 w-4" />
+                        Ajouter aux favoris
+                    </Button>
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={handleBatchExport}
+                        disabled={isExporting}
+                        className="gap-1.5"
+                    >
+                        <Download className="h-4 w-4" />
+                        CSV
+                    </Button>
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={async () => {
+                            const ids = Array.from(selectedIds)
+                            const response = await fetch('/api/export/pdf', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ document_ids: ids, include_content: true })
+                            })
+                            if (response.ok) {
+                                const blob = await response.blob()
+                                const url = URL.createObjectURL(blob)
+                                const link = document.createElement('a')
+                                link.href = url
+                                link.download = `archon-report-${new Date().toISOString().slice(0, 10)}.pdf`
+                                link.click()
+                                URL.revokeObjectURL(url)
+                            }
+                        }}
+                        className="gap-1.5"
+                    >
+                        <FileText className="h-4 w-4" />
+                        PDF
+                    </Button>
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={clearSelection}
+                        className="gap-1.5"
+                    >
+                        <X className="h-4 w-4" />
+                    </Button>
+                </div>
+            )}
+
             {/* Results */}
             <ScrollArea className="flex-1">
                 <div className="p-4 space-y-3">
                     {results.map((result) => (
-                        <ResultCard
+                        <div
                             key={result.document_id}
-                            result={result}
-                            isSelected={selectedId === result.document_id}
-                            onClick={() => onSelect(result)}
-                        />
+                            className="relative group"
+                        >
+                            {/* Checkbox overlay */}
+                            <div
+                                className={cn(
+                                    "absolute left-2 top-1/2 -translate-y-1/2 z-10 transition-opacity",
+                                    hasSelection ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                                )}
+                                onClick={(e) => toggleSelection(result.document_id, e)}
+                            >
+                                <Checkbox
+                                    checked={selectedIds.has(result.document_id)}
+                                    className="h-5 w-5"
+                                />
+                            </div>
+                            <div className={cn(
+                                "transition-all",
+                                hasSelection || "group-hover:pl-8"
+                            )}>
+                                <ResultCard
+                                    result={result}
+                                    isSelected={selectedId === result.document_id}
+                                    onClick={() => onSelect(result)}
+                                    className={cn(
+                                        selectedIds.has(result.document_id) && "ring-2 ring-primary/50 pl-8"
+                                    )}
+                                />
+                            </div>
+                        </div>
                     ))}
                 </div>
             </ScrollArea>

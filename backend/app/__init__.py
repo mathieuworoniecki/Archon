@@ -1,1 +1,1 @@
-"""War Room Backend App Package."""
+"""Archon Backend App Package."""
