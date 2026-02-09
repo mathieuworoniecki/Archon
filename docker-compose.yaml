@@ -25,14 +25,15 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - MEILISEARCH_URL=http://meilisearch:7700
       - QDRANT_URL=http://qdrant:6333
-      - DATABASE_URL=sqlite:///./data/finders.db
+      - DATABASE_URL=postgresql://archon:archon@postgres:5432/archon
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - TESSERACT_CMD=/usr/bin/tesseract
       - DISABLE_AUTH=${DISABLE_AUTH:-false}
     volumes:
-      - backend_data:/app/data
       - ${DOCUMENTS_PATH:-./documents}:/documents:ro
     depends_on:
+      postgres:
+        condition: service_healthy
       meilisearch:
         condition: service_healthy
       qdrant:
@@ -44,29 +45,53 @@ services:
     restart: unless-stopped
 
   # =============================================================================
-  # CELERY WORKER - Background Task Processing
+  # CELERY WORKER - Background Task Processing (4 concurrent workers)
   # =============================================================================
   celery-worker:
     build: ./backend
     container_name: finders-celery
-    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q celery,scan,documents
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -Q celery,scan,documents
     environment:
       - REDIS_URL=redis://redis:6379/0
       - MEILISEARCH_URL=http://meilisearch:7700
       - QDRANT_URL=http://qdrant:6333
-      - DATABASE_URL=sqlite:///./data/finders.db
+      - DATABASE_URL=postgresql://archon:archon@postgres:5432/archon
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - TESSERACT_CMD=/usr/bin/tesseract
     volumes:
-      - backend_data:/app/data
       - ${DOCUMENTS_PATH:-./documents}:/documents:ro
     depends_on:
+      postgres:
+        condition: service_healthy
       meilisearch:
         condition: service_healthy
       qdrant:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - finders_network
+    restart: unless-stopped
+
+  # =============================================================================
+  # POSTGRESQL - Main Database (replaces SQLite)
+  # =============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: finders-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=archon
+      - POSTGRES_PASSWORD=archon
+      - POSTGRES_DB=archon
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U archon"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - finders_network
     restart: unless-stopped
@@ -137,14 +162,14 @@ services:
     restart: unless-stopped
 
 volumes:
+  postgres_data:
+    name: finders_postgres_data
   meilisearch_data:
     name: finders_meilisearch_data
   qdrant_data:
     name: finders_qdrant_data
   redis_data:
     name: finders_redis_data
-  backend_data:
-    name: finders_backend_data
 
 networks:
   finders_network:

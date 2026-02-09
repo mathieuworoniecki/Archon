@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     qdrant_collection: str = "documents"
     
     # Database
-    database_url: str = "sqlite:///./data/finders.db"
+    database_url: str = "postgresql://archon:archon@postgres:5432/archon"
     
     # Scan Configuration
     scan_root_path: str = "./documents"

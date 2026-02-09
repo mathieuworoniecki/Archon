@@ -52,17 +52,17 @@ def get_timeline_aggregation(
     Returns a list of data points with counts and breakdown by file type.
     Uses SQL-level aggregation to handle millions of documents efficiently.
     """
-    # Build SQLite strftime format based on granularity
+    # Build PostgreSQL to_char format based on granularity
     granularity_formats = {
-        "day": "%Y-%m-%d",
-        "week": "%Y-W%W",
-        "month": "%Y-%m",
-        "year": "%Y",
+        "day": "YYYY-MM-DD",
+        "week": "IYYY-\"W\"IW",
+        "month": "YYYY-MM",
+        "year": "YYYY",
     }
     date_format = granularity_formats[granularity]
     
-    # SQLite-compatible date grouping using func.strftime
-    date_key = func.strftime(date_format, Document.file_modified_at).label("date_key")
+    # PostgreSQL date grouping using func.to_char
+    date_key = func.to_char(Document.file_modified_at, date_format).label("date_key")
     
     # Base filter conditions
     base_filters = [Document.file_modified_at.isnot(None)]
@@ -88,7 +88,7 @@ def get_timeline_aggregation(
     # Query 2: Get count per date bucket + file type breakdown
     type_query = (
         db.query(
-            func.strftime(date_format, Document.file_modified_at).label("date_key"),
+            func.to_char(Document.file_modified_at, date_format).label("date_key"),
             Document.file_type,
             func.count(Document.id).label("type_count")
         )

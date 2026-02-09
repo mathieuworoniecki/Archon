@@ -1,4 +1,7 @@
-from sqlalchemy import create_engine, event, text
+"""
+Archon Backend - Database Configuration (PostgreSQL)
+"""
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 from .config import get_settings
@@ -6,27 +9,14 @@ from .models import Base
 
 settings = get_settings()
 
-# Create engine - detect if SQLite or PostgreSQL
-connect_args = {}
-if settings.database_url.startswith("sqlite"):
-    connect_args["check_same_thread"] = False
-
+# PostgreSQL connection pool — allows true parallel workers
 engine = create_engine(
     settings.database_url,
-    connect_args=connect_args,
-    pool_pre_ping=True  # PostgreSQL connection health check
+    pool_size=10,        # 10 persistent connections
+    max_overflow=20,     # 20 additional on burst
+    pool_pre_ping=True,  # connection health check
+    pool_recycle=1800,   # recycle after 30min
 )
-
-# SQLite performance pragmas — WAL mode enables concurrent reads during writes
-if settings.database_url.startswith("sqlite"):
-    @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_conn, _):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA cache_size=-64000")   # 64 MB
-        cursor.execute("PRAGMA busy_timeout=5000")
-        cursor.close()
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -43,20 +33,13 @@ def _run_migrations():
     ]
     
     with engine.connect() as conn:
-        is_sqlite = "sqlite" in str(engine.url)
-        
         for table, column, ddl in migrations:
             try:
-                if is_sqlite:
-                    result = conn.execute(text(f"PRAGMA table_info({table})"))
-                    cols = [row[1] for row in result]
-                else:
-                    # PostgreSQL / other ANSI-SQL databases
-                    result = conn.execute(text(
-                        "SELECT column_name FROM information_schema.columns "
-                        f"WHERE table_name = '{table}'"
-                    ))
-                    cols = [row[0] for row in result]
+                result = conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    f"WHERE table_name = '{table}'"
+                ))
+                cols = [row[0] for row in result]
                 
                 if column not in cols:
                     conn.execute(text(ddl))
