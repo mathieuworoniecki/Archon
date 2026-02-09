@@ -29,7 +29,7 @@ from ..services.meilisearch import get_meilisearch_service
 from ..services.qdrant import get_qdrant_service
 from ..services.embeddings import get_embeddings_service
 from ..services.ner_service import get_ner_service
-from ..utils.hashing import compute_file_hashes
+from ..utils.hashing import compute_fast_hash, compute_file_hashes
 from ..config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -71,8 +71,17 @@ def log_scan_error(scan_id: int, db: Session, file_path: str, error_type: str, e
     db.commit()
 
 
-def compute_hashes_safe(file_path: str) -> Optional[Tuple[str, str]]:
-    """Compute file hashes, returning None on error."""
+def compute_fast_hash_safe(file_path: str) -> Optional[str]:
+    """Compute fast hash for dedup, returning None on error."""
+    try:
+        h = compute_fast_hash(file_path)
+        return h if h else None
+    except Exception:
+        return None
+
+
+def compute_proof_hashes_safe(file_path: str) -> Optional[Tuple[str, str]]:
+    """Compute SHA256+MD5 for chain of proof, only on NEW files."""
     try:
         return compute_file_hashes(file_path)
     except Exception:
@@ -89,9 +98,12 @@ def extract_file_safe(file_info: Dict, ocr_service: OCRService) -> Optional[Dict
     try:
         metadata = ocr_service.get_file_metadata(file_path)
 
-        # Lazy Video OCR: defer expensive video OCR until accessed
+        # Defer OCR for video and image — extract on access, not bulk scan
         if file_type == DocumentType.VIDEO:
             text_content = "[VIDEO] OCR déféré — sera extrait à l'accès"
+            used_ocr = False
+        elif file_type == DocumentType.IMAGE:
+            text_content = "[IMAGE] OCR déféré — sera extrait à l'accès"
             used_ocr = False
         else:
             text_content, used_ocr = ocr_service.extract_text(file_path)
@@ -111,36 +123,39 @@ def extract_file_safe(file_info: Dict, ocr_service: OCRService) -> Optional[Dict
 
 def discover_files_streaming(root_path: str, ocr_service: OCRService, progress_callback=None) -> List[Dict[str, Any]]:
     """
-    Discover all processable files in a directory with STREAMING progress updates.
+    Discover all processable files using os.scandir (2-3x faster than os.walk).
     Reports progress during enumeration for real-time UI feedback.
     """
     files = []
-    root = Path(root_path)
     discovered_count = 0
 
-    if not root.exists():
+    if not os.path.exists(root_path):
         raise FileNotFoundError(f"Path does not exist: {root_path}")
 
-    for dirpath, dirnames, filenames in os.walk(root_path):
-        dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+    def _scan_dir(dirpath: str):
+        nonlocal discovered_count
+        try:
+            with os.scandir(dirpath) as it:
+                for entry in it:
+                    if entry.name.startswith('.'):
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        _scan_dir(entry.path)
+                    elif entry.is_file(follow_symlinks=False):
+                        doc_type = ocr_service.detect_type(entry.path)
+                        if doc_type != DocumentType.UNKNOWN:
+                            files.append({
+                                "path": entry.path,
+                                "type": doc_type,
+                                "archive_path": None
+                            })
+                            discovered_count += 1
+                            if progress_callback and discovered_count % 1000 == 0:
+                                progress_callback(discovered_count)
+        except PermissionError:
+            pass  # Skip inaccessible directories
 
-        for filename in filenames:
-            if filename.startswith('.'):
-                continue
-
-            file_path = os.path.join(dirpath, filename)
-            doc_type = ocr_service.detect_type(file_path)
-
-            if doc_type != DocumentType.UNKNOWN:
-                files.append({
-                    "path": file_path,
-                    "type": doc_type,
-                    "archive_path": None
-                })
-                discovered_count += 1
-
-                if progress_callback and discovered_count % 1000 == 0:
-                    progress_callback(discovered_count)
+    _scan_dir(root_path)
 
     if progress_callback:
         progress_callback(discovered_count)
@@ -248,45 +263,41 @@ def run_scan(self, scan_id: int, resume: bool = False, enable_embeddings: bool =
                 batch_end = min(batch_start + BATCH_SIZE, total_files)
                 batch = files[batch_start:batch_end]
 
-                # --- (a) Parallel hash computation ---
+                # --- (a) FAST parallel hash (xxhash for dedup) ---
                 with ThreadPoolExecutor(max_workers=EXTRACT_WORKERS) as pool:
-                    hash_futures = {pool.submit(compute_hashes_safe, f["path"]): f for f in batch}
-                    hash_results = {}
+                    hash_futures = {pool.submit(compute_fast_hash_safe, f["path"]): f for f in batch}
+                    fast_hashes = {}
                     for future in as_completed(hash_futures):
                         f = hash_futures[future]
-                        hash_results[f["path"]] = future.result()
+                        fast_hashes[f["path"]] = future.result()
 
-                # --- (b) Batch dedup ---
+                # --- (b) Batch dedup via fast hash ---
                 valid_hashes = {
-                    path: hashes for path, hashes in hash_results.items()
-                    if hashes is not None
+                    path: h for path, h in fast_hashes.items() if h is not None
                 }
-                existing_sha256 = set()
+                existing_hashes = set()
                 if valid_hashes:
-                    sha_list = [h[1] for h in valid_hashes.values()]
-                    # Query in chunks of 500 to avoid SQLite variable limit
-                    for i in range(0, len(sha_list), 500):
-                        chunk = sha_list[i:i + 500]
+                    hash_list = list(valid_hashes.values())
+                    for i in range(0, len(hash_list), 500):
+                        chunk = hash_list[i:i + 500]
                         existing_docs = db.query(Document.hash_sha256).filter(
                             Document.hash_sha256.in_(chunk)
                         ).all()
-                        existing_sha256.update(r[0] for r in existing_docs)
+                        existing_hashes.update(r[0] for r in existing_docs)
 
                 # Separate new vs skipped
                 new_files = []
                 for f in batch:
-                    h = hash_results.get(f["path"])
+                    h = fast_hashes.get(f["path"])
                     file_type_str = f["type"].value if hasattr(f["type"], 'value') else str(f["type"])
 
                     if h is None:
-                        # Hash failed — skip
                         skipped += 1
                         processed += 1
                         type_counts[file_type_str] = type_counts.get(file_type_str, 0) + 1
                         continue
 
-                    if h[1] in existing_sha256:
-                        # Already in DB — skip
+                    if h in existing_hashes:
                         skipped += 1
                         processed += 1
                         type_counts[file_type_str] = type_counts.get(file_type_str, 0) + 1
@@ -298,9 +309,7 @@ def run_scan(self, scan_id: int, resume: bool = False, enable_embeddings: bool =
                             skipped_details.pop(0)
                         continue
 
-                    # Attach hashes for later
-                    f["hash_md5"] = h[0]
-                    f["hash_sha256"] = h[1]
+                    f["fast_hash"] = h
                     new_files.append(f)
 
                 if not new_files:
@@ -329,7 +338,24 @@ def run_scan(self, scan_id: int, resume: bool = False, enable_embeddings: bool =
                         result = future.result()
                         extracted_results.append((f, result))
 
-                # --- (d) Bulk DB insert ---
+                # --- (d) Compute proof hashes for successfully extracted files ---
+                # (only for NEW files that passed extraction — not duplicates)
+                proof_hashes = {}
+                successfully_extracted = [
+                    (fi, er) for fi, er in extracted_results
+                    if er is not None and "text_content" in er
+                ]
+                if successfully_extracted:
+                    with ThreadPoolExecutor(max_workers=EXTRACT_WORKERS) as pool:
+                        proof_futures = {
+                            pool.submit(compute_proof_hashes_safe, fi["path"]): fi
+                            for fi, _ in successfully_extracted
+                        }
+                        for future in as_completed(proof_futures):
+                            fi = proof_futures[future]
+                            proof_hashes[fi["path"]] = future.result()
+
+                # --- (e) Bulk DB insert ---
                 documents_to_add = []
                 meili_docs = []
                 batch_failed = 0
@@ -339,7 +365,6 @@ def run_scan(self, scan_id: int, resume: bool = False, enable_embeddings: bool =
                     type_counts[file_type_str] = type_counts.get(file_type_str, 0) + 1
 
                     if extract_result is None:
-                        # Empty content
                         failed += 1
                         batch_failed += 1
                         recent_errors.append({
@@ -353,7 +378,6 @@ def run_scan(self, scan_id: int, resume: bool = False, enable_embeddings: bool =
                         continue
 
                     if "error" in extract_result and "text_content" not in extract_result:
-                        # Extraction error
                         failed += 1
                         batch_failed += 1
                         recent_errors.append({
@@ -371,6 +395,14 @@ def run_scan(self, scan_id: int, resume: bool = False, enable_embeddings: bool =
                     text_content = extract_result["text_content"]
                     used_ocr = extract_result["used_ocr"]
 
+                    # Use proof hashes if available, else fast_hash as fallback
+                    ph = proof_hashes.get(file_info["path"])
+                    if ph:
+                        md5, sha256 = ph
+                    else:
+                        md5 = ""
+                        sha256 = file_info.get("fast_hash", "")
+
                     document = Document(
                         scan_id=scan_id,
                         file_path=file_info["path"],
@@ -382,8 +414,8 @@ def run_scan(self, scan_id: int, resume: bool = False, enable_embeddings: bool =
                         has_ocr=1 if used_ocr else 0,
                         file_modified_at=datetime.fromtimestamp(metadata["file_modified_at"]),
                         archive_path=file_info.get("archive_path"),
-                        hash_md5=file_info["hash_md5"],
-                        hash_sha256=file_info["hash_sha256"],
+                        hash_md5=md5,
+                        hash_sha256=sha256,
                     )
                     documents_to_add.append(document)
                     recent_files.append(Path(file_info["path"]).name)
