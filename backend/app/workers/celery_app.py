@@ -1,9 +1,9 @@
 """
 Archon Backend - Celery Application Configuration
 
-Priority queues prevent the "noisy neighbor" problem (audit2 §2.1):
+Priority queues prevent the "noisy neighbor" problem:
  - 'scan' queue: heavy scan operations (long-running, resource-intensive)
- - 'documents' queue: lightweight per-document processing
+ - 'documents' queue: per-document + post-scan batch processing
  - 'celery' default: everything else
 """
 from celery import Celery
@@ -28,17 +28,18 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
-    task_time_limit=3600,  # 1 hour timeout per task
-    worker_prefetch_multiplier=1,  # Process one task at a time
-    task_acks_late=True,  # Acknowledge after task completes
-    result_expires=86400,  # Results expire after 24 hours
+    task_time_limit=86400,      # 24h max (scan on 1.37M files)
+    task_soft_time_limit=82800, # 23h soft limit
+    worker_prefetch_multiplier=1,
+    task_acks_late=True,
+    result_expires=86400,
 )
 
 # Priority queue definitions
 celery_app.conf.task_queues = (
-    Queue("celery"),           # default queue
-    Queue("scan"),             # heavy scan operations
-    Queue("documents"),        # per-document processing
+    Queue("celery"),
+    Queue("scan"),
+    Queue("documents"),
 )
 celery_app.conf.task_default_queue = "celery"
 
@@ -46,4 +47,7 @@ celery_app.conf.task_default_queue = "celery"
 celery_app.conf.task_routes = {
     "app.workers.tasks.run_scan": {"queue": "scan"},
     "app.workers.tasks.process_document": {"queue": "documents"},
+    "app.workers.tasks.run_ner_batch": {"queue": "documents"},
+    "app.workers.tasks.run_embeddings_batch": {"queue": "documents"},
 }
+

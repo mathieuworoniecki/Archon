@@ -1,13 +1,24 @@
 """
 Archon Backend - Celery Tasks
-Multi-pass document processing pipeline
+High-performance batched document processing pipeline
+
+Architecture:
+  1. Discovery — os.walk to enumerate all files
+  2. Batch Processing — groups of BATCH_SIZE files go through:
+     a. Parallel hash computation (ThreadPool)
+     b. Batch dedup (single SQL query per batch)
+     c. Parallel text extraction (ThreadPool)
+     d. Bulk DB insert (single transaction)
+     e. Batch MeiliSearch index (single API call)
+  3. Post-scan — NER + Embeddings run as separate Celery tasks
 """
 import os
 import json
+import logging
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
-from celery import current_task
+from typing import List, Dict, Any, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlalchemy.orm import Session
 
 from .celery_app import celery_app
@@ -17,13 +28,26 @@ from ..services.ocr import get_ocr_service, OCRService
 from ..services.meilisearch import get_meilisearch_service
 from ..services.qdrant import get_qdrant_service
 from ..services.embeddings import get_embeddings_service
-from ..services.archive_extractor import get_archive_extractor
 from ..services.ner_service import get_ner_service
 from ..utils.hashing import compute_file_hashes
 from ..config import get_settings
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# ═══════════════════════════════════════════════════════════════
+# TUNING CONSTANTS
+# ═══════════════════════════════════════════════════════════════
+BATCH_SIZE = 200          # Files per batch (DB commit + MeiliSearch call)
+EXTRACT_WORKERS = 8       # Parallel threads for hash/extraction
+PROGRESS_INTERVAL = 200   # Update progress every N files
+NER_BATCH_SIZE = 100      # Documents per NER batch
+EMBED_BATCH_SIZE = 50     # Documents per embedding batch
+
+
+# ═══════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════
 
 def update_scan_progress(scan_id: int, db: Session, **kwargs):
     """Update scan progress in database."""
@@ -41,44 +65,72 @@ def log_scan_error(scan_id: int, db: Session, file_path: str, error_type: str, e
         scan_id=scan_id,
         file_path=file_path,
         error_type=error_type,
-        error_message=str(error_message)[:2000]  # Limit error message length
+        error_message=str(error_message)[:2000]
     )
     db.add(error)
     db.commit()
+
+
+def compute_hashes_safe(file_path: str) -> Optional[Tuple[str, str]]:
+    """Compute file hashes, returning None on error."""
+    try:
+        return compute_file_hashes(file_path)
+    except Exception:
+        return None
+
+
+def extract_file_safe(file_info: Dict, ocr_service: OCRService) -> Optional[Dict]:
+    """
+    Extract text + metadata from a single file. Thread-safe.
+    Returns enriched dict or None on failure.
+    """
+    file_path = file_info["path"]
+    file_type = file_info["type"]
+    try:
+        metadata = ocr_service.get_file_metadata(file_path)
+
+        # Lazy Video OCR: defer expensive video OCR until accessed
+        if file_type == DocumentType.VIDEO:
+            text_content = "[VIDEO] OCR déféré — sera extrait à l'accès"
+            used_ocr = False
+        else:
+            text_content, used_ocr = ocr_service.extract_text(file_path)
+
+        if not text_content or not text_content.strip():
+            return None  # Will be counted as failed
+
+        return {
+            **file_info,
+            "metadata": metadata,
+            "text_content": text_content,
+            "used_ocr": used_ocr,
+        }
+    except Exception as e:
+        return {"error": str(e), **file_info}
 
 
 def discover_files_streaming(root_path: str, ocr_service: OCRService, progress_callback=None) -> List[Dict[str, Any]]:
     """
     Discover all processable files in a directory with STREAMING progress updates.
     Reports progress during enumeration for real-time UI feedback.
-    
-    Args:
-        root_path: Directory to scan
-        ocr_service: OCR service for type detection
-        progress_callback: Optional callback(discovered_count) called every 1000 files
-    
-    Returns:
-        List of dicts with file info.
     """
     files = []
     root = Path(root_path)
     discovered_count = 0
-    
+
     if not root.exists():
         raise FileNotFoundError(f"Path does not exist: {root_path}")
-    
-    # Fast streaming discovery with os.walk (no archive extraction for speed)
+
     for dirpath, dirnames, filenames in os.walk(root_path):
-        # Skip hidden directories
         dirnames[:] = [d for d in dirnames if not d.startswith('.')]
-        
+
         for filename in filenames:
             if filename.startswith('.'):
                 continue
-                
+
             file_path = os.path.join(dirpath, filename)
             doc_type = ocr_service.detect_type(file_path)
-            
+
             if doc_type != DocumentType.UNKNOWN:
                 files.append({
                     "path": file_path,
@@ -86,41 +138,46 @@ def discover_files_streaming(root_path: str, ocr_service: OCRService, progress_c
                     "archive_path": None
                 })
                 discovered_count += 1
-                
-                # Report progress every 1000 files
+
                 if progress_callback and discovered_count % 1000 == 0:
                     progress_callback(discovered_count)
-    
-    # Final callback
+
     if progress_callback:
         progress_callback(discovered_count)
-    
+
     return files
 
+
+# ═══════════════════════════════════════════════════════════════
+# MAIN SCAN TASK — Batched Pipeline
+# ═══════════════════════════════════════════════════════════════
 
 @celery_app.task(bind=True, name="app.workers.tasks.run_scan")
 def run_scan(self, scan_id: int, resume: bool = False, enable_embeddings: bool = False):
     """
-    Main scan task - orchestrates the multi-pass pipeline.
-    
+    Main scan task — high-performance batched pipeline.
+
     Pipeline:
-    1. Detection: Discover all files
-    2. Extraction: Extract text (with OCR if needed)
-    3. Indexation Meilisearch: Full-text index
-    4. Indexation Qdrant: Semantic embeddings
-    5. NER Extraction: Named entities
-    
+    1. Discovery: Enumerate all files (streaming progress)
+    2. Batch Processing (BATCH_SIZE=200 files per cycle):
+       a. Parallel hash computation → ThreadPool(8)
+       b. Batch dedup → single SQL WHERE IN query
+       c. Parallel text extraction → ThreadPool(8)
+       d. Bulk DB insert → single transaction
+       e. Batch MeiliSearch index → single API call
+    3. Post-scan: Auto-launch NER + Embeddings tasks
+
     Args:
         scan_id: ID of the scan to process
         resume: If True, skip already processed documents
+        enable_embeddings: If True, launch embedding task post-scan
     """
-    
+
     with get_db_context() as db:
-        # Get scan record
         scan = db.query(Scan).filter(Scan.id == scan_id).first()
         if not scan:
             return {"error": f"Scan {scan_id} not found"}
-        
+
         # Get already processed files if resuming
         processed_paths = set()
         if resume:
@@ -128,304 +185,461 @@ def run_scan(self, scan_id: int, resume: bool = False, enable_embeddings: bool =
                 Document.scan_id == scan_id
             ).all()
             processed_paths = {doc.file_path for doc in existing_docs}
-        
+
         # Update scan status
         scan.status = ScanStatus.RUNNING
         if not resume:
             scan.started_at = datetime.now(timezone.utc)
         scan.celery_task_id = self.request.id
         db.commit()
-        
+
         try:
             # Initialize services
             ocr_service = get_ocr_service()
             meili_service = get_meilisearch_service()
-            qdrant_service = get_qdrant_service()
-            embeddings_service = get_embeddings_service()
-            
+
             # Redis for real-time progress publishing
             import redis
             redis_client = redis.Redis.from_url(settings.redis_url)
-            
-            # === PASS 1: DETECTION (with streaming progress) ===
+
+            # ═══ PASS 1: DISCOVERY ═══
             self.update_state(state="PROGRESS", meta={"phase": "detection", "progress": 0})
-            
+
             def on_discovery_progress(discovered_count: int):
-                """Callback to publish discovery progress to Redis SSE channel."""
-                # Update scan in DB periodically
                 scan.total_files = discovered_count
                 db.commit()
-                
-                # Publish to Redis for SSE streaming
                 redis_client.publish(f"scan:{scan_id}:progress", json.dumps({
                     "phase": "detection",
                     "discovered": discovered_count,
                     "progress": 0,
                     "status": "discovering"
                 }))
-            
+
             files = discover_files_streaming(scan.path, ocr_service, on_discovery_progress)
-            
-            # Filter out already processed files when resuming
+
+            # Filter already processed on resume
             if resume and processed_paths:
                 files = [f for f in files if f["path"] not in processed_paths]
-                # Update total to remaining
                 scan.total_files = len(files) + len(processed_paths)
             else:
                 scan.total_files = len(files)
             db.commit()
-            
+
             if not files:
                 scan.status = ScanStatus.COMPLETED
                 scan.completed_at = datetime.now(timezone.utc)
                 db.commit()
                 return {"status": "completed", "total_files": 0}
-            
-            # On resume, offset counters with already-processed docs
+
+            # ═══ PASS 2: BATCHED PROCESSING ═══
             processed = len(processed_paths) if resume else 0
             failed = 0
             skipped = 0
-            recent_files = []  # Rolling buffer of last 5 files
-            type_counts = {}   # {"pdf": 0, "image": 0, ...}
-            skipped_details = []  # Rolling buffer of last 10 skipped files
-            recent_errors = []    # Rolling buffer of last 10 errors
-            
-            # Process each file
-            for file_info in files:
-                file_path = file_info["path"]
-                file_type = file_info["type"]
-                archive_path = file_info.get("archive_path")  # May be None
-                file_type_str = file_type.value if hasattr(file_type, 'value') else str(file_type)
-                
-                try:
-                    # Update progress with enriched metadata
-                    effective_processed = processed - (len(processed_paths) if resume else 0)
-                    progress = (effective_processed / len(files)) * 100 if len(files) > 0 else 0
-                    self.update_state(
-                        state="PROGRESS",
-                        meta={
-                            "phase": "processing",
-                            "progress": progress,
-                            "current_file": Path(file_path).name,
-                            "current_file_type": file_type_str,
-                            "processed": processed,
-                            "total": scan.total_files,
-                            "recent_files": list(recent_files),
-                            "skipped": skipped,
-                            "type_counts": dict(type_counts),
-                            "skipped_details": list(skipped_details),
-                            "recent_errors": list(recent_errors)
-                        }
-                    )
-                    
-                    # === INCREMENTAL INDEXING: skip unchanged files ===
-                    try:
-                        early_md5, early_sha256 = compute_file_hashes(file_path)
-                        existing_doc = db.query(Document).filter(
-                            Document.hash_sha256 == early_sha256,
-                            Document.file_path == file_path
-                        ).first()
-                        if existing_doc:
-                            skipped += 1
-                            processed += 1
-                            scan.processed_files = processed
-                            type_counts[file_type_str] = type_counts.get(file_type_str, 0) + 1
-                            skipped_details.append({
-                                "file": Path(file_path).name,
-                                "reason": "Fichier inchangé (hash identique)"
-                            })
-                            if len(skipped_details) > 10:
-                                skipped_details.pop(0)
-                            db.commit()
-                            continue  # File unchanged, skip
-                    except Exception:
-                        early_md5, early_sha256 = None, None
-                    
-                    # Get file metadata
-                    metadata = ocr_service.get_file_metadata(file_path)
-                    
-                    # === PASS 2: EXTRACTION ===
-                    # Lazy Video OCR: defer expensive video OCR until accessed
-                    if file_type == DocumentType.VIDEO:
-                        text_content = "[VIDEO] OCR déféré — sera extrait à l'accès"
-                        used_ocr = False
-                    else:
-                        text_content, used_ocr = ocr_service.extract_text(file_path)
-                    
-                    if not text_content or not text_content.strip():
-                        # Log as warning but continue
-                        log_scan_error(
-                            scan_id, db, file_path,
-                            "EmptyContent",
-                            "No text content could be extracted"
-                        )
+            recent_files = []
+            type_counts = {}
+            skipped_details = []
+            recent_errors = []
+
+            total_files = len(files)
+            total_batches = (total_files + BATCH_SIZE - 1) // BATCH_SIZE
+
+            for batch_idx in range(total_batches):
+                batch_start = batch_idx * BATCH_SIZE
+                batch_end = min(batch_start + BATCH_SIZE, total_files)
+                batch = files[batch_start:batch_end]
+
+                # --- (a) Parallel hash computation ---
+                with ThreadPoolExecutor(max_workers=EXTRACT_WORKERS) as pool:
+                    hash_futures = {pool.submit(compute_hashes_safe, f["path"]): f for f in batch}
+                    hash_results = {}
+                    for future in as_completed(hash_futures):
+                        f = hash_futures[future]
+                        hash_results[f["path"]] = future.result()
+
+                # --- (b) Batch dedup ---
+                valid_hashes = {
+                    path: hashes for path, hashes in hash_results.items()
+                    if hashes is not None
+                }
+                existing_sha256 = set()
+                if valid_hashes:
+                    sha_list = [h[1] for h in valid_hashes.values()]
+                    # Query in chunks of 500 to avoid SQLite variable limit
+                    for i in range(0, len(sha_list), 500):
+                        chunk = sha_list[i:i + 500]
+                        existing_docs = db.query(Document.hash_sha256).filter(
+                            Document.hash_sha256.in_(chunk)
+                        ).all()
+                        existing_sha256.update(r[0] for r in existing_docs)
+
+                # Separate new vs skipped
+                new_files = []
+                for f in batch:
+                    h = hash_results.get(f["path"])
+                    file_type_str = f["type"].value if hasattr(f["type"], 'value') else str(f["type"])
+
+                    if h is None:
+                        # Hash failed — skip
+                        skipped += 1
+                        processed += 1
+                        type_counts[file_type_str] = type_counts.get(file_type_str, 0) + 1
+                        continue
+
+                    if h[1] in existing_sha256:
+                        # Already in DB — skip
+                        skipped += 1
+                        processed += 1
+                        type_counts[file_type_str] = type_counts.get(file_type_str, 0) + 1
+                        skipped_details.append({
+                            "file": Path(f["path"]).name,
+                            "reason": "Fichier inchangé (hash identique)"
+                        })
+                        if len(skipped_details) > 10:
+                            skipped_details.pop(0)
+                        continue
+
+                    # Attach hashes for later
+                    f["hash_md5"] = h[0]
+                    f["hash_sha256"] = h[1]
+                    new_files.append(f)
+
+                if not new_files:
+                    # Entire batch was skipped — update progress and continue
+                    scan.processed_files = processed
+                    db.commit()
+                    self.update_state(state="PROGRESS", meta={
+                        "phase": "processing",
+                        "progress": (processed / scan.total_files) * 100 if scan.total_files > 0 else 0,
+                        "processed": processed,
+                        "total": scan.total_files,
+                        "skipped": skipped,
+                        "type_counts": dict(type_counts),
+                        "skipped_details": list(skipped_details),
+                        "recent_errors": list(recent_errors),
+                        "recent_files": list(recent_files),
+                    })
+                    continue
+
+                # --- (c) Parallel text extraction ---
+                extracted_results = []
+                with ThreadPoolExecutor(max_workers=EXTRACT_WORKERS) as pool:
+                    futures = {pool.submit(extract_file_safe, f, ocr_service): f for f in new_files}
+                    for future in as_completed(futures):
+                        f = futures[future]
+                        result = future.result()
+                        extracted_results.append((f, result))
+
+                # --- (d) Bulk DB insert ---
+                documents_to_add = []
+                meili_docs = []
+                batch_failed = 0
+
+                for file_info, extract_result in extracted_results:
+                    file_type_str = file_info["type"].value if hasattr(file_info["type"], 'value') else str(file_info["type"])
+                    type_counts[file_type_str] = type_counts.get(file_type_str, 0) + 1
+
+                    if extract_result is None:
+                        # Empty content
                         failed += 1
-                        scan.failed_files = failed
+                        batch_failed += 1
                         recent_errors.append({
-                            "file": Path(file_path).name,
+                            "file": Path(file_info["path"]).name,
                             "type": "EmptyContent",
                             "message": "Aucun contenu texte extrait"
                         })
                         if len(recent_errors) > 10:
                             recent_errors.pop(0)
-                        db.commit()
+                        processed += 1
                         continue
-                    
-                    # === PASS 2.5: COMPUTE HASHES (Chain of Proof) ===
-                    # Reuse hashes from incremental check if available
-                    if early_sha256 is None:
-                        hash_md5, hash_sha256 = compute_file_hashes(file_path)
-                    else:
-                        hash_md5, hash_sha256 = early_md5, early_sha256
-                    
-                    # Create document record
+
+                    if "error" in extract_result and "text_content" not in extract_result:
+                        # Extraction error
+                        failed += 1
+                        batch_failed += 1
+                        recent_errors.append({
+                            "file": Path(file_info["path"]).name,
+                            "type": "ExtractionError",
+                            "message": str(extract_result["error"])[:200]
+                        })
+                        if len(recent_errors) > 10:
+                            recent_errors.pop(0)
+                        processed += 1
+                        continue
+
+                    # Build Document model
+                    metadata = extract_result["metadata"]
+                    text_content = extract_result["text_content"]
+                    used_ocr = extract_result["used_ocr"]
+
                     document = Document(
                         scan_id=scan_id,
-                        file_path=file_path,
+                        file_path=file_info["path"],
                         file_name=metadata["file_name"],
-                        file_type=file_type,
+                        file_type=file_info["type"],
                         file_size=metadata["file_size"],
                         text_content=text_content,
                         text_length=len(text_content),
                         has_ocr=1 if used_ocr else 0,
                         file_modified_at=datetime.fromtimestamp(metadata["file_modified_at"]),
-                        archive_path=archive_path,  # Track archive origin
-                        hash_md5=hash_md5,
-                        hash_sha256=hash_sha256
+                        archive_path=file_info.get("archive_path"),
+                        hash_md5=file_info["hash_md5"],
+                        hash_sha256=file_info["hash_sha256"],
                     )
-                    db.add(document)
-                    db.flush()  # Get document ID
-
-                    
-                    # === PASS 3: MEILISEARCH INDEXATION ===
-                    meili_result = meili_service.index_document(
-                        doc_id=document.id,
-                        file_path=file_path,
-                        file_name=metadata["file_name"],
-                        file_type=file_type.value,
-                        text_content=text_content,
-                        scan_id=scan_id,
-                        file_modified_at=document.file_modified_at.isoformat() if document.file_modified_at else None,
-                        file_size=metadata["file_size"]
-                    )
-                    document.meilisearch_id = str(document.id)
-                    
-                    # === PASS 4: QDRANT VECTORIZATION ===
-                    if enable_embeddings and text_content and settings.gemini_api_key:
-                        try:
-                            # Chunk and embed
-                            chunks_with_embeddings = embeddings_service.process_document(text_content)
-                            
-                            if chunks_with_embeddings:
-                                # Index in Qdrant
-                                point_ids = qdrant_service.index_chunks(
-                                    document_id=document.id,
-                                    scan_id=scan_id,
-                                    file_path=file_path,
-                                    file_name=metadata["file_name"],
-                                    file_type=file_type.value,
-                                    chunks=chunks_with_embeddings
-                                )
-                                document.qdrant_ids = json.dumps(point_ids)
-                        except Exception as e:
-                            # Log embedding error but don't fail the document
-                            log_scan_error(
-                                scan_id, db, file_path,
-                                "EmbeddingError",
-                                str(e)
-                            )
-                    
-                    # === PASS 5: NER EXTRACTION ===
-                    if text_content:
-                        try:
-                            ner_service = get_ner_service()
-                            extracted_entities = ner_service.extract_entities(
-                                text_content,
-                                include_types=["PER", "ORG", "LOC", "MISC"]
-                            )
-                            
-                            for ent in extracted_entities:
-                                entity = Entity(
-                                    document_id=document.id,
-                                    text=ent["text"][:255],  # Truncate if needed
-                                    type=ent["type"],
-                                    count=ent["count"],
-                                    start_char=ent.get("start_char")
-                                )
-                                db.add(entity)
-                        except Exception as e:
-                            # NER is optional, log but don't fail
-                            log_scan_error(
-                                scan_id, db, file_path,
-                                "NERError",
-                                str(e)
-                            )
-                    
-                    db.commit()
-                    processed += 1
-                    scan.processed_files = processed
-                    type_counts[file_type_str] = type_counts.get(file_type_str, 0) + 1
-                    # Update recent files rolling buffer
-                    recent_files.append(Path(file_path).name)
+                    documents_to_add.append(document)
+                    recent_files.append(Path(file_info["path"]).name)
                     if len(recent_files) > 5:
                         recent_files.pop(0)
-                    db.commit()
-                    
-                except Exception as e:
-                    # Log error and continue with next file
-                    log_scan_error(
-                        scan_id, db, file_path,
-                        type(e).__name__,
-                        str(e)
-                    )
-                    failed += 1
-                    scan.failed_files = failed
-                    recent_errors.append({
-                        "file": Path(file_path).name,
-                        "type": type(e).__name__,
-                        "message": str(e)[:200]
-                    })
-                    if len(recent_errors) > 10:
-                        recent_errors.pop(0)
-                    db.commit()
-            
-            # Update final status
+                    processed += 1
+
+                # Bulk insert all documents
+                if documents_to_add:
+                    db.add_all(documents_to_add)
+                    db.flush()  # Get IDs assigned
+
+                    # Set meilisearch_id and build MeiliSearch batch
+                    for doc in documents_to_add:
+                        doc.meilisearch_id = str(doc.id)
+                        meili_docs.append({
+                            "id": str(doc.id),
+                            "file_path": doc.file_path,
+                            "file_name": doc.file_name,
+                            "file_type": doc.file_type.value,
+                            "text_content": doc.text_content,
+                            "scan_id": scan_id,
+                            "file_modified_at": doc.file_modified_at.isoformat() if doc.file_modified_at else None,
+                            "file_size": doc.file_size,
+                        })
+
+                # --- (e) Batch MeiliSearch index ---
+                if meili_docs:
+                    try:
+                        meili_service.index_documents_batch(meili_docs)
+                    except Exception as e:
+                        logger.error(f"MeiliSearch batch error: {e}")
+
+                # --- (f) Single commit for entire batch ---
+                scan.processed_files = processed
+                scan.failed_files = failed
+                db.commit()
+
+                # Update Celery state for SSE
+                effective_progress = (processed / scan.total_files) * 100 if scan.total_files > 0 else 0
+                self.update_state(state="PROGRESS", meta={
+                    "phase": "processing",
+                    "progress": effective_progress,
+                    "current_file": recent_files[-1] if recent_files else None,
+                    "processed": processed,
+                    "total": scan.total_files,
+                    "recent_files": list(recent_files),
+                    "skipped": skipped,
+                    "type_counts": dict(type_counts),
+                    "skipped_details": list(skipped_details),
+                    "recent_errors": list(recent_errors),
+                })
+
+            # ═══ COMPLETE ═══
             scan.status = ScanStatus.COMPLETED
             scan.completed_at = datetime.now(timezone.utc)
             db.commit()
-            
+
+            # ═══ POST-SCAN: Launch NER + Embeddings tasks ═══
+            try:
+                run_ner_batch.delay(scan_id)
+                logger.info(f"Post-scan NER task launched for scan {scan_id}")
+            except Exception as e:
+                logger.error(f"Failed to launch NER task: {e}")
+
+            if enable_embeddings:
+                try:
+                    run_embeddings_batch.delay(scan_id)
+                    logger.info(f"Post-scan embeddings task launched for scan {scan_id}")
+                except Exception as e:
+                    logger.error(f"Failed to launch embeddings task: {e}")
+
             return {
                 "status": "completed",
-                "total_files": len(files),
+                "total_files": total_files,
                 "processed": processed,
-                "failed": failed
+                "failed": failed,
+                "skipped": skipped,
             }
-            
+
         except Exception as e:
-            # Fatal error - mark scan as failed
             scan.status = ScanStatus.FAILED
             scan.error_message = str(e)
             scan.completed_at = datetime.now(timezone.utc)
             db.commit()
-            
             raise
 
 
+# ═══════════════════════════════════════════════════════════════
+# POST-SCAN: NER Batch Task
+# ═══════════════════════════════════════════════════════════════
+
+@celery_app.task(bind=True, name="app.workers.tasks.run_ner_batch")
+def run_ner_batch(self, scan_id: int):
+    """
+    Post-scan NER extraction — runs after main scan completes.
+    Processes all documents from a scan through SpaCy in batches.
+    """
+    with get_db_context() as db:
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        if not scan:
+            return {"error": f"Scan {scan_id} not found"}
+
+        # Get all documents without entities
+        documents = db.query(Document).filter(
+            Document.scan_id == scan_id,
+            Document.text_content.isnot(None),
+            Document.text_content != "",
+        ).all()
+
+        if not documents:
+            return {"status": "completed", "processed": 0}
+
+        ner_service = get_ner_service()
+        processed = 0
+        errors = 0
+
+        for i in range(0, len(documents), NER_BATCH_SIZE):
+            batch = documents[i:i + NER_BATCH_SIZE]
+
+            for doc in batch:
+                try:
+                    # Skip videos (deferred OCR)
+                    if doc.text_content.startswith("[VIDEO]"):
+                        continue
+
+                    extracted_entities = ner_service.extract_entities(
+                        doc.text_content,
+                        include_types=["PER", "ORG", "LOC", "MISC"]
+                    )
+
+                    for ent in extracted_entities:
+                        entity = Entity(
+                            document_id=doc.id,
+                            text=ent["text"][:255],
+                            type=ent["type"],
+                            count=ent["count"],
+                            start_char=ent.get("start_char")
+                        )
+                        db.add(entity)
+
+                    processed += 1
+                except Exception as e:
+                    errors += 1
+                    logger.error(f"NER error on doc {doc.id}: {e}")
+
+            # Commit per batch
+            db.commit()
+
+            self.update_state(state="PROGRESS", meta={
+                "phase": "ner",
+                "processed": processed,
+                "total": len(documents),
+                "errors": errors,
+            })
+
+        return {
+            "status": "completed",
+            "processed": processed,
+            "errors": errors,
+        }
+
+
+# ═══════════════════════════════════════════════════════════════
+# POST-SCAN: Embeddings Batch Task
+# ═══════════════════════════════════════════════════════════════
+
+@celery_app.task(bind=True, name="app.workers.tasks.run_embeddings_batch")
+def run_embeddings_batch(self, scan_id: int):
+    """
+    Post-scan embeddings — runs after main scan completes.
+    Processes all documents through Gemini embeddings in batches.
+    """
+    if not settings.gemini_api_key:
+        return {"status": "skipped", "reason": "No Gemini API key"}
+
+    with get_db_context() as db:
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        if not scan:
+            return {"error": f"Scan {scan_id} not found"}
+
+        # Get documents without embeddings
+        documents = db.query(Document).filter(
+            Document.scan_id == scan_id,
+            Document.text_content.isnot(None),
+            Document.text_content != "",
+            (Document.qdrant_ids.is_(None)) | (Document.qdrant_ids == ""),
+        ).all()
+
+        if not documents:
+            return {"status": "completed", "processed": 0}
+
+        embeddings_service = get_embeddings_service()
+        qdrant_service = get_qdrant_service()
+        processed = 0
+        errors = 0
+
+        for i in range(0, len(documents), EMBED_BATCH_SIZE):
+            batch = documents[i:i + EMBED_BATCH_SIZE]
+
+            for doc in batch:
+                try:
+                    if doc.text_content.startswith("[VIDEO]"):
+                        continue
+
+                    chunks_with_embeddings = embeddings_service.process_document(doc.text_content)
+
+                    if chunks_with_embeddings:
+                        point_ids = qdrant_service.index_chunks(
+                            document_id=doc.id,
+                            scan_id=scan_id,
+                            file_path=doc.file_path,
+                            file_name=doc.file_name,
+                            file_type=doc.file_type.value,
+                            chunks=chunks_with_embeddings
+                        )
+                        doc.qdrant_ids = json.dumps(point_ids)
+
+                    processed += 1
+                except Exception as e:
+                    errors += 1
+                    logger.error(f"Embedding error on doc {doc.id}: {e}")
+
+            db.commit()
+
+            self.update_state(state="PROGRESS", meta={
+                "phase": "embeddings",
+                "processed": processed,
+                "total": len(documents),
+                "errors": errors,
+            })
+
+        return {
+            "status": "completed",
+            "processed": processed,
+            "errors": errors,
+        }
+
+
+# ═══════════════════════════════════════════════════════════════
+# SINGLE DOCUMENT RE-PROCESSING
+# ═══════════════════════════════════════════════════════════════
+
 @celery_app.task(bind=True, name="app.workers.tasks.process_document")
 def process_document(self, document_id: int):
-    """
-    Process a single document (for re-indexing).
-    """
+    """Process a single document (for re-indexing)."""
     with get_db_context() as db:
         document = db.query(Document).filter(Document.id == document_id).first()
         if not document:
             return {"error": f"Document {document_id} not found"}
-        
+
         try:
             meili_service = get_meilisearch_service()
             qdrant_service = get_qdrant_service()
             embeddings_service = get_embeddings_service()
-            
+
             # Re-index in Meilisearch
             meili_service.index_document(
                 doc_id=document.id,
@@ -437,14 +651,12 @@ def process_document(self, document_id: int):
                 file_modified_at=document.file_modified_at.isoformat() if document.file_modified_at else None,
                 file_size=document.file_size
             )
-            
+
             # Re-index in Qdrant
             if document.text_content and settings.gemini_api_key:
-                # Delete old vectors
                 if document.qdrant_ids:
                     qdrant_service.delete_by_document(document.id)
-                
-                # Create new embeddings
+
                 chunks_with_embeddings = embeddings_service.process_document(document.text_content)
                 if chunks_with_embeddings:
                     point_ids = qdrant_service.index_chunks(
@@ -457,8 +669,8 @@ def process_document(self, document_id: int):
                     )
                     document.qdrant_ids = json.dumps(point_ids)
                     db.commit()
-            
+
             return {"status": "completed", "document_id": document_id}
-            
+
         except Exception as e:
             return {"status": "failed", "error": str(e)}

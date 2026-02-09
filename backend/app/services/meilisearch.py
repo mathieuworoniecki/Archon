@@ -64,6 +64,15 @@ class MeilisearchService:
         task = index.add_documents([document])
         return {"task_uid": task.task_uid, "status": "enqueued"}
     
+    def index_documents_batch(self, documents: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Batch index multiple documents in a single API call (up to 200)."""
+        if not documents:
+            return {"status": "empty"}
+        index = self.client.index(self.index_name)
+        task = index.add_documents(documents)
+        return {"task_uid": task.task_uid, "status": "enqueued", "count": len(documents)}
+
+    
     def search(
         self,
         query: str,

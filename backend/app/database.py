@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 from .config import get_settings
@@ -16,6 +16,17 @@ engine = create_engine(
     connect_args=connect_args,
     pool_pre_ping=True  # PostgreSQL connection health check
 )
+
+# SQLite performance pragmas — WAL mode enables concurrent reads during writes
+if settings.database_url.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA cache_size=-64000")   # 64 MB
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
