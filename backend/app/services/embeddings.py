@@ -3,13 +3,21 @@ Archon Backend - Gemini Embeddings Service
 Using Google gemini-embedding-001 for text embeddings
 """
 import logging
-import google.generativeai as genai
 from typing import List, Dict, Any
 from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+try:
+    from google import genai as google_genai
+    from google.genai import types as google_genai_types
+except Exception:  # pragma: no cover - fallback path for legacy environments
+    google_genai = None
+    google_genai_types = None
+
+legacy_genai = None
 
 # Gemini gemini-embedding-001 dimension
 EMBEDDING_DIMENSION = 3072
@@ -19,10 +27,53 @@ class EmbeddingsService:
     """Service for generating text embeddings using Google Gemini."""
     
     def __init__(self):
-        genai.configure(api_key=settings.gemini_api_key)
+        global legacy_genai
+        self._use_legacy_sdk = False
+        if google_genai is not None:
+            self.client = google_genai.Client(api_key=settings.gemini_api_key)
+        else:
+            if legacy_genai is None:
+                try:
+                    import google.generativeai as legacy_genai_module
+                    legacy_genai = legacy_genai_module
+                except Exception as exc:
+                    raise RuntimeError("No Gemini SDK available. Install google-genai.") from exc
+            self._use_legacy_sdk = True
+            legacy_genai.configure(api_key=settings.gemini_api_key)
+            logger.warning("google-genai unavailable, falling back to deprecated google-generativeai SDK")
+
         self.model = settings.embedding_model
         self.chunk_size = settings.chunk_size
         self.chunk_overlap = settings.chunk_overlap
+
+    def _embed(self, contents: str | List[str], task_type: str) -> List[List[float]]:
+        if self._use_legacy_sdk:
+            result = legacy_genai.embed_content(
+                model=self.model,
+                content=contents,
+                task_type=task_type,
+            )
+            embeddings = result.get("embedding", [])
+            if isinstance(contents, list):
+                return [list(embedding) for embedding in embeddings]
+            return [list(embeddings)] if embeddings else []
+
+        response = self.client.models.embed_content(
+            model=self.model,
+            contents=contents,
+            config=google_genai_types.EmbedContentConfig(task_type=task_type),
+        )
+
+        response_embeddings = getattr(response, "embeddings", None) or []
+        parsed = [list(embedding.values) for embedding in response_embeddings if getattr(embedding, "values", None)]
+        if parsed:
+            return parsed
+
+        single_embedding = getattr(response, "embedding", None)
+        if single_embedding is not None and getattr(single_embedding, "values", None):
+            return [list(single_embedding.values)]
+
+        return []
     
     def count_tokens(self, text: str) -> int:
         """Approximate token count (roughly 4 chars per token)."""
@@ -69,12 +120,8 @@ class EmbeddingsService:
     
     def get_embedding(self, text: str) -> List[float]:
         """Get embedding for a single text using Gemini."""
-        result = genai.embed_content(
-            model=self.model,
-            content=text,
-            task_type="retrieval_document"
-        )
-        return result['embedding']
+        embeddings = self._embed(text, "RETRIEVAL_DOCUMENT")
+        return embeddings[0] if embeddings else [0.0] * EMBEDDING_DIMENSION
     
     def get_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         """Get embeddings for multiple texts using batch API."""
@@ -87,13 +134,7 @@ class EmbeddingsService:
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
             try:
-                result = genai.embed_content(
-                    model=self.model,
-                    content=batch,
-                    task_type="retrieval_document"
-                )
-                # embed_content returns a list of embeddings when given a list
-                embeddings.extend(result['embedding'])
+                embeddings.extend(self._embed(batch, "RETRIEVAL_DOCUMENT"))
             except Exception as e:
                 # Fallback: return zero vectors for this batch
                 embeddings.extend([[0.0] * EMBEDDING_DIMENSION for _ in batch])
@@ -103,12 +144,8 @@ class EmbeddingsService:
     
     def get_query_embedding(self, query: str) -> List[float]:
         """Get embedding for a search query (uses retrieval_query task)."""
-        result = genai.embed_content(
-            model=self.model,
-            content=query,
-            task_type="retrieval_query"
-        )
-        return result['embedding']
+        embeddings = self._embed(query, "RETRIEVAL_QUERY")
+        return embeddings[0] if embeddings else [0.0] * EMBEDDING_DIMENSION
     
     def embed_chunks(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """

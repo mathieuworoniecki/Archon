@@ -64,6 +64,26 @@ function CockpitContent() {
         setSelectedDocument(result.document_id, result)
     }, [setSelectedDocument])
 
+    const selectedResultIndex = selectedDocumentId
+        ? searchResults.findIndex((result) => result.document_id === selectedDocumentId)
+        : -1
+    const canNavigatePrevious = selectedResultIndex > 0
+    const canNavigateNext = selectedResultIndex >= 0 && selectedResultIndex < searchResults.length - 1
+
+    const navigateToPreviousDocument = useCallback(() => {
+        if (!canNavigatePrevious) return
+        const result = searchResults[selectedResultIndex - 1]
+        if (!result) return
+        setSelectedDocument(result.document_id, result)
+    }, [canNavigatePrevious, searchResults, selectedResultIndex, setSelectedDocument])
+
+    const navigateToNextDocument = useCallback(() => {
+        if (!canNavigateNext) return
+        const result = searchResults[selectedResultIndex + 1]
+        if (!result) return
+        setSelectedDocument(result.document_id, result)
+    }, [canNavigateNext, searchResults, selectedResultIndex, setSelectedDocument])
+
     return (
         <div className="h-full flex flex-col bg-background">
             {/* Main Content - 3 columns */}
@@ -91,7 +111,13 @@ function CockpitContent() {
                 {/* Zone 3: Viewer */}
                 <div className="flex-1 min-w-0 flex flex-col">
                     {selectedDocumentId ? (
-                        <DocumentViewer documentId={selectedDocumentId} />
+                        <DocumentViewer
+                            documentId={selectedDocumentId}
+                            onNavigatePrevious={navigateToPreviousDocument}
+                            onNavigateNext={navigateToNextDocument}
+                            canNavigatePrevious={canNavigatePrevious}
+                            canNavigateNext={canNavigateNext}
+                        />
                     ) : (
                         <div className="flex-1 flex items-center justify-center text-muted-foreground">
                             <div className="text-center">

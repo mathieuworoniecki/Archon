@@ -5,7 +5,6 @@ Uses Gemini Flash for generation and semantic search for context retrieval.
 import logging
 import threading
 import time as _time
-import google.generativeai as genai
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 
@@ -16,6 +15,13 @@ from .qdrant import get_qdrant_service
 from .embeddings import get_embeddings_service
 
 settings = get_settings()
+
+try:
+    from google import genai as google_genai
+except Exception:  # pragma: no cover - fallback path for legacy environments
+    google_genai = None
+
+legacy_genai = None
 
 
 class ChatMessage:
@@ -85,11 +91,56 @@ Citation format: [Document: file_name]"""
         return self.SYSTEM_PROMPTS.get(locale, self.SYSTEM_PROMPTS["fr"])
 
     def __init__(self):
-        genai.configure(api_key=settings.gemini_api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash')
+        global legacy_genai
+        self.model_name = "gemini-2.0-flash"
+        self._use_legacy_sdk = False
+
+        if google_genai is not None:
+            self.client = google_genai.Client(api_key=settings.gemini_api_key)
+        else:
+            if legacy_genai is None:
+                try:
+                    import google.generativeai as legacy_genai_module
+                    legacy_genai = legacy_genai_module
+                except Exception as exc:
+                    raise RuntimeError("No Gemini SDK available. Install google-genai.") from exc
+            self._use_legacy_sdk = True
+            legacy_genai.configure(api_key=settings.gemini_api_key)
+            self.model = legacy_genai.GenerativeModel(self.model_name)
+            logger.warning("google-genai unavailable, falling back to deprecated google-generativeai SDK")
+
         self.qdrant_service = get_qdrant_service()
         self.embeddings_service = get_embeddings_service()
         self.conversation_history: List[ChatMessage] = []
+
+    def _generate_text(self, prompt: str) -> str:
+        if self._use_legacy_sdk:
+            response = self.model.generate_content(prompt)
+            return response.text
+
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+        )
+        return response.text or ""
+
+    def _stream_generated_text(self, prompt: str):
+        if self._use_legacy_sdk:
+            response = self.model.generate_content(prompt, stream=True)
+            for chunk in response:
+                text = getattr(chunk, "text", None)
+                if text:
+                    yield text
+            return
+
+        stream = self.client.models.generate_content_stream(
+            model=self.model_name,
+            contents=prompt,
+        )
+        for chunk in stream:
+            text = getattr(chunk, "text", None)
+            if text:
+                yield text
     
     def _retrieve_context(self, query: str, limit: int = 5) -> List[DocumentContext]:
         """
@@ -191,8 +242,7 @@ Citation format: [Document: file_name]"""
         
         # Generate response
         try:
-            response = self.model.generate_content(full_prompt)
-            assistant_response = response.text
+            assistant_response = self._generate_text(full_prompt)
         except Exception as e:
             assistant_response = f"Erreur lors de la génération de la réponse: {str(e)}"
         
@@ -248,11 +298,9 @@ Citation format: [Document: file_name]"""
         # Stream response
         full_response = ""
         try:
-            response = self.model.generate_content(full_prompt, stream=True)
-            for chunk in response:
-                if chunk.text:
-                    full_response += chunk.text
-                    yield {"token": chunk.text}
+            for token in self._stream_generated_text(full_prompt):
+                full_response += token
+                yield {"token": token}
         except Exception as e:
             error_msg = f"Erreur: {str(e)}"
             full_response = error_msg
@@ -295,8 +343,7 @@ Contenu:
 RÉSUMÉ:"""
         
         try:
-            response = self.model.generate_content(prompt)
-            return response.text
+            return self._generate_text(prompt)
         except Exception as e:
             if locale == "en":
                 return f"Error generating summary: {str(e)}"
@@ -323,8 +370,7 @@ QUESTION: {question}
 RÉPONSE:"""
         
         try:
-            response = self.model.generate_content(prompt)
-            return response.text
+            return self._generate_text(prompt)
         except Exception as e:
             return f"Erreur: {str(e)}"
     

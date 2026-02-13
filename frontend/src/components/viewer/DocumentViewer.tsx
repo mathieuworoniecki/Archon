@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Document as PDFDocument, Page, pdfjs } from 'react-pdf'
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, FileText, Image as ImageIcon, FileCode, ExternalLink, Home, Users, Building2, MapPin, Hash, ChevronDown, ChevronUp, ShieldAlert, Video, Database, Clock } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, FileText, Image as ImageIcon, FileCode, ExternalLink, Home, Users, Building2, MapPin, Hash, ChevronDown, ChevronUp, ShieldAlert, Video, Database, Clock, SkipBack, SkipForward } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -20,6 +20,10 @@ pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/b
 interface DocumentViewerProps {
     documentId: number | null
     searchQuery?: string
+    onNavigatePrevious?: () => void
+    onNavigateNext?: () => void
+    canNavigatePrevious?: boolean
+    canNavigateNext?: boolean
 }
 
 interface DocumentEntity {
@@ -39,6 +43,13 @@ const ENTITY_TYPE_CONFIG: Record<string, { icon: typeof Users; color: string; la
     ORG: { icon: Building2, color: 'text-emerald-400 bg-emerald-400/10', labelKey: 'viewer.entityORG' },
     LOC: { icon: MapPin, color: 'text-amber-400 bg-amber-400/10', labelKey: 'viewer.entityLOC' },
     MISC: { icon: Hash, color: 'text-purple-400 bg-purple-400/10', labelKey: 'viewer.entityMISC' },
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+    const element = target as HTMLElement | null
+    if (!element) return false
+    const tag = element.tagName
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable
 }
 
 function Breadcrumb({ filePath }: { filePath: string }) {
@@ -294,12 +305,23 @@ function ProjectOverviewPanel() {
     )
 }
 
-export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps) {
+export function DocumentViewer({
+    documentId,
+    searchQuery,
+    onNavigatePrevious,
+    onNavigateNext,
+    canNavigatePrevious = true,
+    canNavigateNext = true,
+}: DocumentViewerProps) {
     const [docInfo, setDocInfo] = useState<{ file_name: string; file_type: string; file_path?: string; text_content?: string } | null>(null)
     const [numPages, setNumPages] = useState<number>(0)
     const [pageNumber, setPageNumber] = useState(1)
     const [scale, setScale] = useState(1.0)
     const [isLoading, setIsLoading] = useState(false)
+    const { t } = useTranslation()
+
+    const canGoPrevious = typeof onNavigatePrevious === 'function' && canNavigatePrevious
+    const canGoNext = typeof onNavigateNext === 'function' && canNavigateNext
 
     useEffect(() => {
         if (!documentId) {
@@ -325,6 +347,53 @@ export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps)
             .catch(() => setDocInfo(null))
             .finally(() => setIsLoading(false))
     }, [documentId])
+
+    useEffect(() => {
+        if (!documentId || (!canGoPrevious && !canGoNext)) return
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.defaultPrevented) return
+            if (event.metaKey || event.ctrlKey || event.altKey) return
+            if (isEditableTarget(event.target)) return
+            if (window.getSelection()?.type === 'Range') return
+
+            if (event.key === 'ArrowLeft' && canGoPrevious) {
+                event.preventDefault()
+                onNavigatePrevious?.()
+            } else if (event.key === 'ArrowRight' && canGoNext) {
+                event.preventDefault()
+                onNavigateNext?.()
+            }
+        }
+
+        window.addEventListener('keydown', handleKeyDown)
+        return () => window.removeEventListener('keydown', handleKeyDown)
+    }, [canGoNext, canGoPrevious, documentId, onNavigateNext, onNavigatePrevious])
+
+    const documentNavigationControls = (canGoPrevious || canGoNext) ? (
+        <div className="flex items-center gap-1 border rounded-md p-0.5 bg-background/50" aria-label="Document navigation">
+            <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => onNavigatePrevious?.()}
+                disabled={!canGoPrevious}
+                title={t('viewer.prevDocument')}
+            >
+                <SkipBack className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => onNavigateNext?.()}
+                disabled={!canGoNext}
+                title={t('viewer.nextDocument')}
+            >
+                <SkipForward className="h-3.5 w-3.5" />
+            </Button>
+        </div>
+    ) : null
 
     if (!documentId) {
         return <ProjectOverviewPanel />
@@ -354,6 +423,7 @@ export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps)
                 {/* Toolbar */}
                 <div className="flex items-center justify-between p-2 border-b bg-card">
                     <div className="flex items-center gap-2">
+                        {documentNavigationControls}
                         <Button
                             variant="outline"
                             size="icon"
@@ -439,6 +509,7 @@ export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps)
                 {docInfo.file_path && <Breadcrumb filePath={docInfo.file_path} />}
                 <div className="flex items-center justify-between p-2 border-b bg-card">
                     <div className="flex items-center gap-2">
+                        {documentNavigationControls}
                         <ImageIcon className="h-4 w-4" />
                         <span className="text-sm font-medium">{docInfo.file_name}</span>
                     </div>
@@ -485,6 +556,7 @@ export function DocumentViewer({ documentId, searchQuery }: DocumentViewerProps)
             {docInfo?.file_path && <Breadcrumb filePath={docInfo.file_path} />}
             <div className="flex items-center justify-between p-2 border-b bg-card">
                 <div className="flex items-center gap-2">
+                    {documentNavigationControls}
                     <FileCode className="h-4 w-4" />
                     <span className="text-sm font-medium">{docInfo?.file_name}</span>
                 </div>

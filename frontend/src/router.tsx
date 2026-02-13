@@ -5,7 +5,7 @@ import { useStats } from '@/hooks/useStats'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { useTheme } from '@/hooks/useTheme'
 import { useTranslation } from '@/contexts/I18nContext'
-import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
+import { useMemo, useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { isAuthenticated, clearAuth, getUser } from '@/lib/auth'
 import { useProject, ProjectProvider } from '@/contexts/ProjectContext'
 import { toast } from 'sonner'
@@ -13,22 +13,32 @@ import { CommandPalette } from '@/components/CommandPalette'
 import { AppBreadcrumb } from '@/components/AppBreadcrumb'
 import { checkHealth, type HealthStatus } from '@/lib/api'
 
-// Import pages
-import { HomePage } from '@/pages/HomePage'
-import { FavoritesPage } from '@/pages/FavoritesPage'
-import { ScansPage } from '@/pages/ScansPage'
-// BrowsePage merged into HomePage — kept file for reference
-import { ChatPage } from '@/pages/ChatPage'
-import { TimelinePage } from '@/pages/TimelinePage'
-import { GalleryPage } from '@/pages/GalleryPage'
-import { LoginPage } from '@/pages/LoginPage'
-import { ProjectDashboard } from '@/pages/ProjectDashboard'
-import { EntitiesPage } from '@/pages/EntitiesPage'
-import { GraphPage } from '@/pages/GraphPage'
-import { CockpitPage } from '@/pages/CockpitPage'
-import { AuditPage } from '@/pages/AuditPage'
-import { WatchlistPage } from '@/pages/WatchlistPage'
-import { TasksPage } from '@/pages/TasksPage'
+const HomePage = lazy(() => import('@/pages/HomePage').then((m) => ({ default: m.HomePage })))
+const FavoritesPage = lazy(() => import('@/pages/FavoritesPage').then((m) => ({ default: m.FavoritesPage })))
+const ScansPage = lazy(() => import('@/pages/ScansPage').then((m) => ({ default: m.ScansPage })))
+const ChatPage = lazy(() => import('@/pages/ChatPage').then((m) => ({ default: m.ChatPage })))
+const TimelinePage = lazy(() => import('@/pages/TimelinePage').then((m) => ({ default: m.TimelinePage })))
+const GalleryPage = lazy(() => import('@/pages/GalleryPage').then((m) => ({ default: m.GalleryPage })))
+const LoginPage = lazy(() => import('@/pages/LoginPage').then((m) => ({ default: m.LoginPage })))
+const ProjectDashboard = lazy(() => import('@/pages/ProjectDashboard').then((m) => ({ default: m.ProjectDashboard })))
+const EntitiesPage = lazy(() => import('@/pages/EntitiesPage').then((m) => ({ default: m.EntitiesPage })))
+const GraphPage = lazy(() => import('@/pages/GraphPage').then((m) => ({ default: m.GraphPage })))
+const CockpitPage = lazy(() => import('@/pages/CockpitPage').then((m) => ({ default: m.CockpitPage })))
+const AuditPage = lazy(() => import('@/pages/AuditPage').then((m) => ({ default: m.AuditPage })))
+const WatchlistPage = lazy(() => import('@/pages/WatchlistPage').then((m) => ({ default: m.WatchlistPage })))
+const TasksPage = lazy(() => import('@/pages/TasksPage').then((m) => ({ default: m.TasksPage })))
+
+function RouteLoadingFallback() {
+    return (
+        <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+            Loading...
+        </div>
+    )
+}
+
+function withRouteSuspense(element: JSX.Element): JSX.Element {
+    return <Suspense fallback={<RouteLoadingFallback />}>{element}</Suspense>
+}
 
 // Protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -78,6 +88,7 @@ function RootLayout() {
             `N → ${t('nav.scans')}`,
             `R → ${t('nav.scans')}`,
             `F → ${t('nav.favorites')}`,
+            `←/→ → ${t('viewer.prevDocument')} / ${t('viewer.nextDocument')}`,
         ]
         const missingAdditions = additions.filter(addition => !baseDescription.includes(addition))
         return missingAdditions.length > 0 ? `${baseDescription} · ${missingAdditions.join(' · ')}` : baseDescription
@@ -423,23 +434,23 @@ function HealthIndicator() {
 export const router = createBrowserRouter([
     {
         path: '/login',
-        element: <LoginPage />,
+        element: withRouteSuspense(<LoginPage />),
     },
     {
         path: '/projects',
-        element: <ProtectedRoute><ProjectDashboard /></ProtectedRoute>,
+        element: withRouteSuspense(<ProtectedRoute><ProjectDashboard /></ProtectedRoute>),
     },
     {
         path: '/',
-        element: <ProtectedRoute><ProjectGuard><RootLayout /></ProjectGuard></ProtectedRoute>,
+        element: withRouteSuspense(<ProtectedRoute><ProjectGuard><RootLayout /></ProjectGuard></ProtectedRoute>),
         children: [
             {
                 index: true,
-                element: <HomePage />,
+                element: withRouteSuspense(<HomePage />),
             },
             {
                 path: 'favorites',
-                element: <FavoritesPage />,
+                element: withRouteSuspense(<FavoritesPage />),
             },
             {
                 path: 'analysis',
@@ -447,43 +458,43 @@ export const router = createBrowserRouter([
             },
             {
                 path: 'cockpit',
-                element: <CockpitPage />,
+                element: withRouteSuspense(<CockpitPage />),
             },
             {
                 path: 'scans',
-                element: <ScansPage />,
+                element: withRouteSuspense(<ScansPage />),
             },
             {
                 path: 'chat',
-                element: <ChatPage />,
+                element: withRouteSuspense(<ChatPage />),
             },
             {
                 path: 'timeline',
-                element: <TimelinePage />,
+                element: withRouteSuspense(<TimelinePage />),
             },
             {
                 path: 'gallery',
-                element: <GalleryPage />,
+                element: withRouteSuspense(<GalleryPage />),
             },
             {
                 path: 'entities',
-                element: <EntitiesPage />,
+                element: withRouteSuspense(<EntitiesPage />),
             },
             {
                 path: 'graph',
-                element: <GraphPage />,
+                element: withRouteSuspense(<GraphPage />),
             },
             {
                 path: 'audit',
-                element: <AuditPage />,
+                element: withRouteSuspense(<AuditPage />),
             },
             {
                 path: 'watchlist',
-                element: <WatchlistPage />,
+                element: withRouteSuspense(<WatchlistPage />),
             },
             {
                 path: 'tasks',
-                element: <TasksPage />,
+                element: withRouteSuspense(<TasksPage />),
             },
         ],
     },

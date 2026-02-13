@@ -157,6 +157,22 @@ export function BrowsePage() {
             .replace('{project}', projectName || t('browse.title'))
             .replace('{count}', String(browse.total))
 
+    const selectedBrowseIndex = selectedDocumentId
+        ? browseResultsAsSearchResults.findIndex((result) => result.document_id === selectedDocumentId)
+        : -1
+    const canNavigatePrevious = selectedBrowseIndex > 0
+    const canNavigateNext = selectedBrowseIndex >= 0 && selectedBrowseIndex < browseResultsAsSearchResults.length - 1
+
+    const navigateToPreviousDocument = useCallback(() => {
+        if (!canNavigatePrevious) return
+        setSelectedDocumentId(browseResultsAsSearchResults[selectedBrowseIndex - 1]?.document_id ?? null)
+    }, [browseResultsAsSearchResults, canNavigatePrevious, selectedBrowseIndex])
+
+    const navigateToNextDocument = useCallback(() => {
+        if (!canNavigateNext) return
+        setSelectedDocumentId(browseResultsAsSearchResults[selectedBrowseIndex + 1]?.document_id ?? null)
+    }, [browseResultsAsSearchResults, canNavigateNext, selectedBrowseIndex])
+
     return (
         <div className="h-full flex flex-col">
             {/* Context line */}
@@ -353,7 +369,13 @@ export function BrowsePage() {
                     {/* Right Panel - Document Viewer */}
                     <Panel defaultSize={60} minSize={40}>
                         <div className="h-full bg-card/20">
-                            <DocumentViewer documentId={selectedDocumentId} />
+                            <DocumentViewer
+                                documentId={selectedDocumentId}
+                                onNavigatePrevious={navigateToPreviousDocument}
+                                onNavigateNext={navigateToNextDocument}
+                                canNavigatePrevious={canNavigatePrevious}
+                                canNavigateNext={canNavigateNext}
+                            />
                         </div>
                     </Panel>
                 </PanelGroup>

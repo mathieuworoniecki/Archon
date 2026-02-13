@@ -43,3 +43,13 @@ crea.md
 audit.md
 AI.md
 *:Zone.Identifier
+
+# Local agent / audit artifacts
+.agent/
+.agents/
+.claude/
+.audit_*.json
+.audit_*.txt
+.tmp_pages_functions.json
+AGENTS.md
+competitor_*.png

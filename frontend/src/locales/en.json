@@ -553,7 +553,9 @@
     "typeDistribution": "Type distribution",
     "lastScan": "Last scan",
     "showOcr": "Show OCR",
-    "hideOcr": "Hide OCR"
+    "hideOcr": "Hide OCR",
+    "prevDocument": "Previous document (Left arrow)",
+    "nextDocument": "Next document (Right arrow)"
   },
   "projects": {
     "loading": "Loading projects...",

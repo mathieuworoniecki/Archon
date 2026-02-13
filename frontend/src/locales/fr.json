@@ -553,7 +553,9 @@
     "typeDistribution": "Répartition par type",
     "lastScan": "Dernier scan",
     "showOcr": "Afficher OCR",
-    "hideOcr": "Masquer OCR"
+    "hideOcr": "Masquer OCR",
+    "prevDocument": "Document précédent (flèche gauche)",
+    "nextDocument": "Document suivant (flèche droite)"
   },
   "projects": {
     "loading": "Chargement des projets...",

@@ -237,6 +237,22 @@ export function HomePage() {
 
     // Get selected document ID for viewer
     const selectedDocumentId = selectedResult?.document_id ?? null
+    const currentViewerResults = mode === 'search' ? results : browseResultsAsSearchResults
+    const currentViewerIndex = selectedDocumentId
+        ? currentViewerResults.findIndex((result) => result.document_id === selectedDocumentId)
+        : -1
+    const canNavigatePrevious = currentViewerIndex > 0
+    const canNavigateNext = currentViewerIndex >= 0 && currentViewerIndex < currentViewerResults.length - 1
+
+    const navigateToPreviousDocument = useCallback(() => {
+        if (!canNavigatePrevious) return
+        setSelectedResult(currentViewerResults[currentViewerIndex - 1] ?? null)
+    }, [canNavigatePrevious, currentViewerIndex, currentViewerResults])
+
+    const navigateToNextDocument = useCallback(() => {
+        if (!canNavigateNext) return
+        setSelectedResult(currentViewerResults[currentViewerIndex + 1] ?? null)
+    }, [canNavigateNext, currentViewerIndex, currentViewerResults])
 
     if (statsLoading) {
         return (
@@ -534,6 +550,10 @@ export function HomePage() {
                         <DocumentViewer
                             documentId={selectedDocumentId}
                             searchQuery={mode === 'search' ? lastQuery : undefined}
+                            onNavigatePrevious={navigateToPreviousDocument}
+                            onNavigateNext={navigateToNextDocument}
+                            canNavigatePrevious={canNavigatePrevious}
+                            canNavigateNext={canNavigateNext}
                         />
                     ) : (
                         <SearchStatsPanel results={results} totalResults={totalResults} lastQuery={lastQuery} />

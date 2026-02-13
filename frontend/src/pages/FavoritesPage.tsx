@@ -292,6 +292,26 @@ export function FavoritesPage() {
         toast.success(t('favorites.exported'))
     }, [favorites, t])
 
+    const visibleFavorites = favorites
+        .filter((fav) => !hiddenIds.has(fav.document_id))
+        .filter((fav) => !activeCollection || activeCollection.documentIds.includes(fav.document_id))
+
+    const selectedFavoriteIndex = selectedDocumentId
+        ? visibleFavorites.findIndex((fav) => fav.document_id === selectedDocumentId)
+        : -1
+    const canNavigatePrevious = selectedFavoriteIndex > 0
+    const canNavigateNext = selectedFavoriteIndex >= 0 && selectedFavoriteIndex < visibleFavorites.length - 1
+
+    const navigateToPreviousFavorite = useCallback(() => {
+        if (!canNavigatePrevious) return
+        setSelectedDocumentId(visibleFavorites[selectedFavoriteIndex - 1]?.document_id ?? null)
+    }, [canNavigatePrevious, selectedFavoriteIndex, visibleFavorites])
+
+    const navigateToNextFavorite = useCallback(() => {
+        if (!canNavigateNext) return
+        setSelectedDocumentId(visibleFavorites[selectedFavoriteIndex + 1]?.document_id ?? null)
+    }, [canNavigateNext, selectedFavoriteIndex, visibleFavorites])
+
     if (isLoading && favorites.length === 0) {
         return (
             <div className="flex-1 flex items-center justify-center">
@@ -472,10 +492,7 @@ export function FavoritesPage() {
                         </div>
                     ) : (
                         <div className="p-2 space-y-2">
-                            {favorites
-                                .filter(fav => !hiddenIds.has(fav.document_id))
-                                .filter(fav => !activeCollection || activeCollection.documentIds.includes(fav.document_id))
-                                .map(fav => (
+                            {visibleFavorites.map(fav => (
                                 <Card
                                     key={fav.id}
                                     className={cn(
@@ -690,7 +707,13 @@ export function FavoritesPage() {
 
             {/* Right Panel - Document Viewer */}
             <div className="flex-1 bg-card/20">
-                <DocumentViewer documentId={selectedDocumentId} />
+                <DocumentViewer
+                    documentId={selectedDocumentId}
+                    onNavigatePrevious={navigateToPreviousFavorite}
+                    onNavigateNext={navigateToNextFavorite}
+                    canNavigatePrevious={canNavigatePrevious}
+                    canNavigateNext={canNavigateNext}
+                />
             </div>
         </div>
     )
