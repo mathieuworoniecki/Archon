@@ -9,6 +9,7 @@ import {
     Clock, Folder, Activity 
 } from 'lucide-react'
 import { useTranslation } from '@/contexts/I18nContext'
+import { authFetch } from '@/lib/auth'
 
 interface ScanDetail {
     id: number
@@ -38,10 +39,10 @@ export function ScanDetailModal({ scanId, open, onClose }: ScanDetailModalProps)
         if (!scanId || !open) return
         
         setLoading(true)
-        fetch(`/api/scan/${scanId}`)
+        authFetch(`/api/scan/${scanId}`)
             .then(res => res.json())
             .then(data => setScan(data))
-            .catch(console.error)
+            .catch(() => setScan(null))
             .finally(() => setLoading(false))
     }, [scanId, open])
 

@@ -5,6 +5,7 @@
  */
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
 import { API_BASE } from '@/lib/api'
+import { authFetch } from '@/lib/auth'
 
 export interface Project {
     name: string
@@ -52,14 +53,14 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     const fetchProjects = useCallback(async () => {
         setIsLoading(true)
         try {
-            const response = await fetch(`${API_BASE}/projects/`)
+            const response = await authFetch(`${API_BASE}/projects/`)
             if (response.ok) {
                 const data = await response.json()
                 setProjects(data.projects || [])
                 setDocumentsPath(data.documents_path || '/documents')
             }
-        } catch (err) {
-            console.error('Failed to fetch projects:', err)
+        } catch {
+            // fetch failure results in empty project list — UI handles this gracefully
         } finally {
             setIsLoading(false)
         }

@@ -5,12 +5,15 @@ import { useTranslation } from '@/contexts/I18nContext'
 
 const routeLabels: Record<string, string> = {
     '/': 'nav.search',
+    '/analysis': 'nav.analysis',
     '/cockpit': 'nav.analysis',
     '/timeline': 'nav.timeline',
     '/chat': 'nav.chat',
     '/gallery': 'nav.gallery',
     '/favorites': 'nav.favorites',
     '/scans': 'nav.scans',
+    '/entities': 'nav.entities',
+    '/graph': 'nav.graph',
 }
 
 export function AppBreadcrumb() {

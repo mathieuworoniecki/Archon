@@ -31,7 +31,7 @@ export function useScanProgress(scanId: number | null) {
             },
             (attempt) => {
                 setIsReconnecting(true)
-                console.log(`Reconnecting to scan ${scanId}, attempt ${attempt}`)
+                void attempt // reconnection attempt tracked via isReconnecting state
             }
         )
 

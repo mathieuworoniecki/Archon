@@ -13,7 +13,7 @@ services:
     depends_on:
       - backend
     networks:
-      - archon_network
+      - frontend_net
     restart: unless-stopped
 
   # =============================================================================
@@ -32,6 +32,9 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-archon}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-archon}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - TESSERACT_CMD=/usr/bin/tesseract
+      - DISABLE_AUTH=false
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
     volumes:
       - backend_data:/app/data
       - ${DOCUMENTS_PATH:-./documents}:/documents:ro
@@ -45,7 +48,8 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - archon_network
+      - frontend_net
+      - backend_net
     restart: unless-stopped
     deploy:
       resources:
@@ -80,7 +84,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - archon_network
+      - backend_net
     restart: unless-stopped
     deploy:
       resources:
@@ -95,7 +99,7 @@ services:
     volumes: *celery_volumes
     depends_on: *celery_depends
     networks:
-      - archon_network
+      - backend_net
     restart: unless-stopped
     deploy:
       resources:
@@ -110,7 +114,7 @@ services:
     volumes: *celery_volumes
     depends_on: *celery_depends
     networks:
-      - archon_network
+      - backend_net
     restart: unless-stopped
     deploy:
       resources:
@@ -125,7 +129,7 @@ services:
     volumes: *celery_volumes
     depends_on: *celery_depends
     networks:
-      - archon_network
+      - backend_net
     restart: unless-stopped
     deploy:
       resources:
@@ -138,16 +142,15 @@ services:
   flower:
     build: ./backend
     container_name: archon-flower
-    command: celery -A app.workers.celery_app flower --port=5555
-    ports:
-      - "5555:5555"
+    command: celery -A app.workers.celery_app flower --port=5555 --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-changeme}
+    # No external port — access via reverse proxy or SSH tunnel
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://${POSTGRES_USER:-archon}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-archon}
     depends_on:
       - redis
     networks:
-      - archon_network
+      - backend_net
     restart: unless-stopped
 
   # =============================================================================
@@ -156,8 +159,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: archon-postgres
-    ports:
-      - "5433:5432"
+    # No external port — internal network only
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-archon}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
@@ -170,7 +172,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - archon_network
+      - backend_net
     restart: unless-stopped
     deploy:
       resources:
@@ -183,8 +185,7 @@ services:
   meilisearch:
     image: getmeili/meilisearch:v1.6
     container_name: archon-meilisearch
-    ports:
-      - "7701:7700"
+    # No external port — internal network only
     volumes:
       - meilisearch_data:/meili_data
     environment:
@@ -199,7 +200,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - archon_network
+      - backend_net
     restart: unless-stopped
     deploy:
       resources:
@@ -212,9 +213,7 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.7.4
     container_name: archon-qdrant
-    ports:
-      - "6335:6333"
-      - "6336:6334"
+    # No external port — internal network only
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
@@ -227,7 +226,7 @@ services:
       retries: 5
       start_period: 20s
     networks:
-      - archon_network
+      - backend_net
     restart: unless-stopped
     deploy:
       resources:
@@ -240,8 +239,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: archon-redis
-    ports:
-      - "6380:6379"
+    # No external port — internal network only
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
@@ -251,7 +249,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - archon_network
+      - backend_net
     restart: unless-stopped
 
 volumes:
@@ -267,5 +265,7 @@ volumes:
     name: archon_backend_data
 
 networks:
-  archon_network:
-    name: archon_network
+  frontend_net:
+    name: archon_frontend_net
+  backend_net:
+    name: archon_backend_net

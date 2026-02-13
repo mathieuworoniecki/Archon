@@ -194,6 +194,9 @@ _detector = None
 def get_pii_detector(enabled_types: List[str] = None) -> PIIDetector:
     """Get PII detector instance."""
     global _detector
+    # Request-specific filters must not reuse the global singleton.
+    if enabled_types:
+        return PIIDetector(enabled_types)
     if _detector is None:
-        _detector = PIIDetector(enabled_types)
+        _detector = PIIDetector()
     return _detector

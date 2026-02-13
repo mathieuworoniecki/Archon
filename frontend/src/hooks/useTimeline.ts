@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { API_BASE } from '@/lib/api'
+import { authFetch } from '@/lib/auth'
+import { useProject } from '@/contexts/ProjectContext'
 
 export interface TimelineDataPoint {
     date: string
@@ -27,6 +29,7 @@ interface UseTimelineOptions {
 }
 
 export function useTimeline(options: UseTimelineOptions = {}) {
+    const { selectedProject } = useProject()
     const [data, setData] = useState<TimelineData | null>(null)
     const [range, setRange] = useState<TimelineRange | null>(null)
     const [isLoading, setIsLoading] = useState(false)
@@ -42,8 +45,9 @@ export function useTimeline(options: UseTimelineOptions = {}) {
             const params = new URLSearchParams()
             params.set('granularity', granularity)
             if (scanId) params.set('scan_id', scanId.toString())
+            if (selectedProject?.path) params.set('project_path', selectedProject.path)
 
-            const response = await fetch(`${API_BASE}/timeline/aggregation?${params}`)
+            const response = await authFetch(`${API_BASE}/timeline/aggregation?${params}`)
             if (!response.ok) throw new Error('Failed to fetch timeline')
             
             const result = await response.json()
@@ -53,22 +57,23 @@ export function useTimeline(options: UseTimelineOptions = {}) {
         } finally {
             setIsLoading(false)
         }
-    }, [granularity, scanId])
+    }, [granularity, scanId, selectedProject?.path])
 
     const fetchRange = useCallback(async () => {
         try {
             const params = new URLSearchParams()
             if (scanId) params.set('scan_id', scanId.toString())
+            if (selectedProject?.path) params.set('project_path', selectedProject.path)
 
-            const response = await fetch(`${API_BASE}/timeline/range?${params}`)
+            const response = await authFetch(`${API_BASE}/timeline/range?${params}`)
             if (!response.ok) throw new Error('Failed to fetch range')
             
             const result = await response.json()
             setRange(result)
-        } catch (err) {
-            console.error('Failed to fetch timeline range:', err)
+        } catch {
+            // non-critical: range info supplements the timeline
         }
-    }, [scanId])
+    }, [scanId, selectedProject?.path])
 
     useEffect(() => {
         fetchTimeline()

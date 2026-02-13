@@ -41,6 +41,7 @@ compressed-rtf==1.0.6
 
 # NLP / Entity Extraction
 spacy==3.7.2
+langextract
 
 # Utilities
 python-dotenv==1.0.0

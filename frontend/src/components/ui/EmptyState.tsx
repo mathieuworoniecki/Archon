@@ -1,14 +1,14 @@
 import { FolderSearch, ArrowRight, FileText, Image, FileCode } from 'lucide-react'
 import { ProjectSelector } from '@/components/projects/ProjectSelector'
-import { useProjects, Project } from '@/hooks/useProjects'
 import { useTranslation } from '@/contexts/I18nContext'
+import { useProject, type Project } from '@/contexts/ProjectContext'
 
 interface EmptyStateProps {
     onStartScan: (projectPath?: string) => void
 }
 
 export function EmptyState({ onStartScan }: EmptyStateProps) {
-    const { projects, isLoading, documentsPath, selectedProject, setSelectedProject } = useProjects()
+    const { projects, isLoading, documentsPath, selectedProject, selectProject } = useProject()
     const { t } = useTranslation()
 
     const handleStartScan = () => {
@@ -20,7 +20,7 @@ export function EmptyState({ onStartScan }: EmptyStateProps) {
     }
 
     const handleSelectProject = (project: Project) => {
-        setSelectedProject(project)
+        selectProject(project)
     }
 
     const getScanButtonLabel = () => {

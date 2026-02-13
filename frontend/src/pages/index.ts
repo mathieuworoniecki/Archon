@@ -1,5 +1,5 @@
 export { HomePage } from './HomePage'
 export { FavoritesPage } from './FavoritesPage'
 export { ScansPage } from './ScansPage'
-export { CockpitPage } from './CockpitPage'
+export { BrowsePage } from './BrowsePage'
 export { GalleryPage } from './GalleryPage'

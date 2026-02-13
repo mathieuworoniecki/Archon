@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from 'react'
-import { Star, Trash2, Eye, Filter, Sparkles, Edit3, Loader2, X, Check, Tags, Plus } from 'lucide-react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { Star, Trash2, Eye, Filter, Sparkles, Edit3, Loader2, X, Check, Tags, Plus, Download, FolderOpen, FolderPlus } from 'lucide-react'
 import { useFavorites } from '@/hooks/useFavorites'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -8,6 +8,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { DocumentViewer } from '@/components/viewer/DocumentViewer'
 import { removeFavorite, getTags, Tag, updateFavorite, API_BASE } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { authFetch } from '@/lib/auth'
 import { Textarea } from '@/components/ui/textarea'
 import {
     Popover,
@@ -16,6 +17,42 @@ import {
 } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useTranslation } from '@/contexts/I18nContext'
+import { toast } from 'sonner'
+import { Input } from '@/components/ui/input'
+
+// ── Collections (localStorage) ────────────────────────
+interface Collection {
+    id: string
+    name: string
+    documentIds: number[]
+}
+
+interface FavoritesSynthesisPayload {
+    synthesis: string
+}
+
+function isFavoritesSynthesisPayload(payload: unknown): payload is FavoritesSynthesisPayload {
+    return (
+        !!payload &&
+        typeof payload === 'object' &&
+        typeof (payload as FavoritesSynthesisPayload).synthesis === 'string'
+    )
+}
+
+function wait(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function loadCollections(): Collection[] {
+    try {
+        const raw = localStorage.getItem('archon_fav_collections')
+        return raw ? JSON.parse(raw) : []
+    } catch { return [] }
+}
+
+function saveCollections(collections: Collection[]) {
+    localStorage.setItem('archon_fav_collections', JSON.stringify(collections))
+}
 
 export function FavoritesPage() {
     const { favorites, total, isLoading, refetch } = useFavorites()
@@ -34,20 +71,109 @@ export function FavoritesPage() {
 
     // Fetch tags on mount
     useEffect(() => {
-        getTags().then(setTags).catch(console.error)
+        getTags().then(setTags).catch(() => { /* non-critical: tags are a UI enhancement */ })
     }, [])
 
-    const handleRemoveFavorite = useCallback(async (documentId: number) => {
-        try {
-            await removeFavorite(documentId)
-            refetch(selectedTagIds.length > 0 ? selectedTagIds : undefined)
-            if (selectedDocumentId === documentId) {
-                setSelectedDocumentId(null)
-            }
-        } catch (err) {
-            console.error('Failed to remove favorite:', err)
+    // Collections
+    const [collections, setCollections] = useState<Collection[]>(loadCollections)
+    const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null)
+    const [showNewCollection, setShowNewCollection] = useState(false)
+    const [newCollectionName, setNewCollectionName] = useState('')
+
+    const createCollection = () => {
+        if (!newCollectionName.trim()) return
+        const newCol: Collection = {
+            id: Date.now().toString(36),
+            name: newCollectionName.trim(),
+            documentIds: [],
         }
-    }, [refetch, selectedDocumentId, selectedTagIds])
+        const updated = [...collections, newCol]
+        setCollections(updated)
+        saveCollections(updated)
+        setNewCollectionName('')
+        setShowNewCollection(false)
+        toast.success(t('favorites.collectionCreated'))
+    }
+
+    const toggleDocInCollection = (collectionId: string, docId: number) => {
+        const updated = collections.map(c => {
+            if (c.id !== collectionId) return c
+            const has = c.documentIds.includes(docId)
+            return {
+                ...c,
+                documentIds: has
+                    ? c.documentIds.filter(id => id !== docId)
+                    : [...c.documentIds, docId],
+            }
+        })
+        setCollections(updated)
+        saveCollections(updated)
+    }
+
+    const deleteCollection = (collectionId: string) => {
+        const updated = collections.filter(c => c.id !== collectionId)
+        setCollections(updated)
+        saveCollections(updated)
+        if (activeCollectionId === collectionId) setActiveCollectionId(null)
+    }
+
+    const activeCollection = collections.find(c => c.id === activeCollectionId)
+
+    // Pending deletes — allows undo before API call fires
+    const pendingDeletesRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
+    const [hiddenIds, setHiddenIds] = useState<Set<number>>(new Set())
+
+    useEffect(() => {
+        return () => {
+            pendingDeletesRef.current.forEach((timer) => clearTimeout(timer))
+            pendingDeletesRef.current.clear()
+        }
+    }, [])
+
+    const handleRemoveFavorite = useCallback((documentId: number) => {
+        if (pendingDeletesRef.current.has(documentId)) return
+
+        // Immediately hide from UI
+        setHiddenIds(prev => new Set([...prev, documentId]))
+        if (selectedDocumentId === documentId) {
+            setSelectedDocumentId(null)
+        }
+
+        // Schedule actual deletion after 5 seconds
+        const timer = setTimeout(async () => {
+            pendingDeletesRef.current.delete(documentId)
+            try {
+                await removeFavorite(documentId)
+                refetch(selectedTagIds.length > 0 ? selectedTagIds : undefined)
+            } catch {
+                toast.error(t('favorites.actionError'))
+            }
+            setHiddenIds(prev => {
+                const next = new Set(prev)
+                next.delete(documentId)
+                return next
+            })
+        }, 5000)
+
+        pendingDeletesRef.current.set(documentId, timer)
+
+        // Show toast with undo button
+        toast(t('favorites.removed'), {
+            action: {
+                label: t('favorites.undo'),
+                onClick: () => {
+                    clearTimeout(timer)
+                    pendingDeletesRef.current.delete(documentId)
+                    setHiddenIds(prev => {
+                        const next = new Set(prev)
+                        next.delete(documentId)
+                        return next
+                    })
+                },
+            },
+            duration: 5000,
+        })
+    }, [refetch, selectedDocumentId, selectedTagIds, t])
 
     const toggleTagFilter = useCallback((tagId: number) => {
         setSelectedTagIds(prev => {
@@ -69,8 +195,8 @@ export function FavoritesPage() {
             await updateFavorite(documentId, { notes: editingNoteText })
             refetch(selectedTagIds.length > 0 ? selectedTagIds : undefined)
             setEditingNoteId(null)
-        } catch (err) {
-            console.error('Failed to save note:', err)
+        } catch {
+            toast.error(t('favorites.actionError'))
         }
     }
 
@@ -89,22 +215,44 @@ export function FavoritesPage() {
         try {
             await updateFavorite(documentId, { tag_ids: newTagIds })
             refetch(selectedTagIds.length > 0 ? selectedTagIds : undefined)
-        } catch (err) {
-            console.error('Failed to update tags:', err)
+        } catch {
+            toast.error(t('favorites.actionError'))
         }
     }
 
     const generateSynthesis = async () => {
         setIsSynthesizing(true)
         try {
-            const response = await fetch(`${API_BASE}/favorites/synthesize`, {
-                method: 'POST'
-            })
-            const data = await response.json()
-            setSynthesis(data.synthesis)
-        } catch (err) {
-            console.error('Failed to generate synthesis:', err)
+            const maxRetries = 2
+            for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+                try {
+                    const response = await authFetch(`${API_BASE}/favorites/synthesize`, {
+                        method: 'POST'
+                    })
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`)
+                    }
+
+                    const payload: unknown = await response.json()
+                    if (!isFavoritesSynthesisPayload(payload)) {
+                        throw new Error('Invalid synthesis payload')
+                    }
+
+                    const synthesisText = payload.synthesis.trim()
+                    if (!synthesisText) {
+                        throw new Error('Empty synthesis payload')
+                    }
+
+                    setSynthesis(synthesisText)
+                    return
+                } catch {
+                    if (attempt >= maxRetries) throw new Error('Synthesis failed')
+                    await wait(300 * (attempt + 1))
+                }
+            }
+        } catch {
             setSynthesis(t('favorites.synthesisError'))
+            toast.error(t('favorites.synthesisError'))
         } finally {
             setIsSynthesizing(false)
         }
@@ -124,6 +272,25 @@ export function FavoritesPage() {
         if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`
         return `${bytes} B`
     }
+
+    const exportFavorites = useCallback(() => {
+        if (favorites.length === 0) return
+        const header = 'File Name,File Type,File Size,Tags,Notes,Date Added\n'
+        const rows = favorites.map(fav => {
+            const tagNames = (fav.tags || []).map(t => t.name).join('; ')
+            const note = (fav.notes || '').replace(/"/g, '""')
+            const doc = fav.document
+            return `"${doc?.file_name || ''}","${doc?.file_type || ''}","${doc ? formatFileSize(doc.file_size) : ''}","${tagNames}","${note}","${fav.created_at || ''}"`
+        }).join('\n')
+        const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' })
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `favorites_${new Date().toISOString().slice(0, 10)}.csv`
+        link.click()
+        URL.revokeObjectURL(url)
+        toast.success(t('favorites.exported'))
+    }, [favorites, t])
 
     if (isLoading && favorites.length === 0) {
         return (
@@ -161,6 +328,16 @@ export function FavoritesPage() {
                             )}
                             {t('favorites.synthesize')}
                         </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={exportFavorites}
+                            disabled={favorites.length === 0}
+                            className="gap-1.5"
+                        >
+                            <Download className="h-4 w-4" />
+                            {t('favorites.export')}
+                        </Button>
                     </div>
 
                     {/* Tag Filters */}
@@ -186,6 +363,72 @@ export function FavoritesPage() {
                             ))}
                         </div>
                     )}
+
+                    {/* Collections */}
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                        <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
+                        <Badge
+                            variant={!activeCollectionId ? 'default' : 'outline'}
+                            className="cursor-pointer text-xs"
+                            onClick={() => setActiveCollectionId(null)}
+                        >
+                            {t('favorites.allCollections')}
+                        </Badge>
+                        {collections.map(col => (
+                            <Badge
+                                key={col.id}
+                                variant={activeCollectionId === col.id ? 'default' : 'outline'}
+                                className="cursor-pointer text-xs group"
+                                onClick={() => setActiveCollectionId(activeCollectionId === col.id ? null : col.id)}
+                            >
+                                {col.name}
+                                <span className="ml-1 opacity-60">({col.documentIds.length})</span>
+                                <button
+                                    className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                                    onClick={(e) => { e.stopPropagation(); deleteCollection(col.id) }}
+                                >
+                                    <X className="h-2.5 w-2.5" />
+                                </button>
+                            </Badge>
+                        ))}
+                        {showNewCollection ? (
+                            <div className="flex items-center gap-1">
+                                <Input
+                                    value={newCollectionName}
+                                    onChange={(e) => setNewCollectionName(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && createCollection()}
+                                    placeholder={t('favorites.collectionName')}
+                                    className="h-6 w-28 text-xs"
+                                    autoFocus
+                                />
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-5 w-5"
+                                    onClick={createCollection}
+                                >
+                                    <Check className="h-3 w-3" />
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-5 w-5"
+                                    onClick={() => { setShowNewCollection(false); setNewCollectionName('') }}
+                                >
+                                    <X className="h-3 w-3" />
+                                </Button>
+                            </div>
+                        ) : (
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-5 w-5"
+                                onClick={() => setShowNewCollection(true)}
+                            >
+                                <FolderPlus className="h-3.5 w-3.5" />
+                            </Button>
+                        )}
+                    </div>
                 </div>
 
                 {/* AI Synthesis Display */}
@@ -223,10 +466,16 @@ export function FavoritesPage() {
                                     : t('favorites.addToFavorites')
                                 }
                             </p>
+                            {selectedTagIds.length === 0 && (
+                                <p className="text-xs mt-3 text-muted-foreground/80 max-w-xs mx-auto">{t('favorites.emptyTip')}</p>
+                            )}
                         </div>
                     ) : (
                         <div className="p-2 space-y-2">
-                            {favorites.map(fav => (
+                            {favorites
+                                .filter(fav => !hiddenIds.has(fav.document_id))
+                                .filter(fav => !activeCollection || activeCollection.documentIds.includes(fav.document_id))
+                                .map(fav => (
                                 <Card
                                     key={fav.id}
                                     className={cn(
@@ -311,7 +560,48 @@ export function FavoritesPage() {
                                                                 </div>
                                                             )}
                                                         </PopoverContent>
-                                                    </Popover>
+                                                        </Popover>
+
+                                                    {/* Add to Collection */}
+                                                    {collections.length > 0 && (
+                                                        <Popover>
+                                                            <PopoverTrigger asChild>
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    className="h-5 w-5 p-0 opacity-50 hover:opacity-100"
+                                                                    onClick={e => e.stopPropagation()}
+                                                                >
+                                                                    <FolderPlus className="h-3 w-3" />
+                                                                </Button>
+                                                            </PopoverTrigger>
+                                                            <PopoverContent
+                                                                className="w-48 p-2"
+                                                                align="start"
+                                                                onClick={e => e.stopPropagation()}
+                                                            >
+                                                                <div className="flex items-center gap-2 mb-2 pb-2 border-b">
+                                                                    <FolderOpen className="h-4 w-4" />
+                                                                    <span className="text-sm font-medium">{t('favorites.collections')}</span>
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    {collections.map(col => {
+                                                                        const isInCol = col.documentIds.includes(fav.document_id)
+                                                                        return (
+                                                                            <div
+                                                                                key={col.id}
+                                                                                className="flex items-center gap-2 cursor-pointer hover:bg-muted rounded px-1 py-0.5"
+                                                                                onClick={() => toggleDocInCollection(col.id, fav.document_id)}
+                                                                            >
+                                                                                <Checkbox checked={isInCol} className="h-3.5 w-3.5" />
+                                                                                <span className="text-sm">{col.name}</span>
+                                                                            </div>
+                                                                        )
+                                                                    })}
+                                                                </div>
+                                                            </PopoverContent>
+                                                        </Popover>
+                                                    )}
                                                 </div>
 
                                                 {/* Notes - View or Edit */}

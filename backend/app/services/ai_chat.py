@@ -101,7 +101,7 @@ Citation format: [Document: file_name]"""
             
             # Search in Qdrant
             results = self.qdrant_service.search(
-                query_vector=query_embedding,
+                query_embedding=query_embedding,
                 limit=limit
             )
             
@@ -110,7 +110,7 @@ Citation format: [Document: file_name]"""
                 contexts.append(DocumentContext(
                     doc_id=result.get("document_id", 0),
                     file_name=result.get("file_name", "unknown"),
-                    snippet=result.get("text", ""),
+                    snippet=result.get("chunk_text", ""),
                     score=result.get("score", 0.0)
                 ))
             
@@ -306,12 +306,13 @@ RÉSUMÉ:"""
         self,
         question: str,
         document_text: str,
-        document_name: str
+        document_name: str,
+        locale: str = "fr",
     ) -> str:
         """
         Answer a specific question about a document.
         """
-        prompt = f"""{self.SYSTEM_PROMPT}
+        prompt = f"""{self._get_system_prompt(locale)}
 
 DOCUMENT: {document_name}
 CONTENU:

@@ -1,15 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { 
     Scan, FolderSearch, CheckCircle2, XCircle, Clock, RefreshCw, 
-    FileText, Image, Play, Database, Video, Zap, Loader2, 
-    Eye, Square, Trash2, ChevronDown, Plus, Pencil
+    FileText, Play, Database, Zap, Loader2, FileDown,
+    Eye, Square, Trash2, Plus, Pencil, ArrowRight, Image
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-// Progress component no longer needed in hero card (custom bars used)
-import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
 import {
     Select,
     SelectContent,
@@ -17,14 +15,10 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select'
-import {
-    Collapsible,
-    CollapsibleContent,
-    CollapsibleTrigger,
-} from '@/components/ui/collapsible'
 import { useScanProgress } from '@/hooks/useScanProgress'
 import { createScan, estimateScan, ScanEstimate, type ScanRecord } from '@/lib/api'
 import { ScanDetailModal } from '@/components/scan/ScanDetailModal'
+import { ScanConfigPanel } from '@/components/scan/ScanConfigPanel'
 import {
     AlertDialog,
     AlertDialogAction,
@@ -35,128 +29,139 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Input } from '@/components/ui/input'
 import { useTranslation } from '@/contexts/I18nContext'
 import { useProject } from '@/contexts/ProjectContext'
+import { authFetch } from '@/lib/auth'
+import { toast } from 'sonner'
+import { formatDuration, formatNumber } from '@/lib/formatters'
 
-interface Project {
-    name: string
-    path: string
-    file_count: number
-    total_size_bytes: number
-}
-
-
+const DELETE_DELAY_MS = 5000
 
 export function ScansPage() {
+    const navigate = useNavigate()
     const [scans, setScans] = useState<ScanRecord[]>([])
     const [isLoading, setIsLoading] = useState(true)
     const { t } = useTranslation()
-    const { selectedProject: contextProject } = useProject()
+    const {
+        selectedProject: contextProject,
+        selectProject,
+        projects,
+        isLoading: isLoadingProjects,
+        refetchProjects,
+    } = useProject()
     
     // New scan
-    const [path, setPath] = useState('/documents')
     const [activeScanId, setActiveScanId] = useState<number | null>(null)
     const [isStarting, setIsStarting] = useState(false)
     
     // Options
-    const [enableEmbeddings, setEnableEmbeddings] = useState(false)
-    const [embeddingTier, setEmbeddingTier] = useState<'free' | 'paid'>('free')
-    const [enableOcr, setEnableOcr] = useState(true)
-    const [showOptions, setShowOptions] = useState(false)
-    const [scanTypes, setScanTypes] = useState({
-        pdf: true,
-        image: true,
-        text: true,
-        video: true
+    const [enableEmbeddings, setEnableEmbeddings] = useState<boolean>(() => {
+        try {
+            return localStorage.getItem('archon_scan_enable_embeddings') === 'true'
+        } catch {
+            return false
+        }
     })
     
-    // Estimation & Projects
+    // Estimation
     const [estimate, setEstimate] = useState<ScanEstimate | null>(null)
     const [isEstimating, setIsEstimating] = useState(false)
-    const [projects, setProjects] = useState<Project[]>([])
-    const [selectedProject, setSelectedProject] = useState<string>('')
-    const [isLoadingProjects, setIsLoadingProjects] = useState(true)
     
     // Modals
     const [selectedScanId, setSelectedScanId] = useState<number | null>(null)
     const [showScanDetail, setShowScanDetail] = useState(false)
     const [scanToDelete, setScanToDelete] = useState<number | null>(null)
+    const [scanToRename, setScanToRename] = useState<ScanRecord | null>(null)
+    const [renameValue, setRenameValue] = useState('')
+    const [isExportingSummary, setIsExportingSummary] = useState(false)
+    const pendingDeletionTimersRef = useRef<Map<string, number>>(new Map())
 
     const { progress, isComplete } = useScanProgress(activeScanId)
 
     useEffect(() => {
         fetchScans()
-        fetchProjects()
     }, [])
 
-    const fetchProjects = async () => {
-        setIsLoadingProjects(true)
+    useEffect(() => {
         try {
-            const response = await fetch('/api/projects/')
-            if (response.ok) {
-                const data = await response.json()
-                const projectsList = data.projects || data
-                setProjects(Array.isArray(projectsList) ? projectsList : [])
-                // Auto-select current project from context
-                if (contextProject && !selectedProject) {
-                    const match = (Array.isArray(projectsList) ? projectsList : []).find(
-                        (p: Project) => p.name === contextProject.name
-                    )
-                    if (match) {
-                        handleProjectChange(match.name)
-                    }
-                }
-            }
-        } catch (err) {
-            console.error('Failed to fetch projects:', err)
-        } finally {
-            setIsLoadingProjects(false)
+            localStorage.setItem('archon_scan_enable_embeddings', String(enableEmbeddings))
+        } catch {
+            // Ignore storage errors.
         }
-    }
+    }, [enableEmbeddings])
 
-    const handleProjectChange = async (projectName: string) => {
-        setSelectedProject(projectName)
-        const project = projects.find(p => p.name === projectName)
-        if (project) {
-            setPath(project.path)
+    useEffect(() => {
+        return () => {
+            pendingDeletionTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+            pendingDeletionTimersRef.current.clear()
+        }
+    }, [])
+
+    useEffect(() => {
+        const projectPath = contextProject?.path
+        if (!projectPath) {
+            setEstimate(null)
+            return
+        }
+
+        let cancelled = false
+        const fetchEstimate = async () => {
             setIsEstimating(true)
             try {
-                const est = await estimateScan(project.path)
-                setEstimate(est)
-            } catch (err) {
-                console.error('Estimation failed:', err)
+                const est = await estimateScan(projectPath)
+                if (!cancelled) setEstimate(est)
+            } catch {
+                if (!cancelled) setEstimate(null)
             } finally {
-                setIsEstimating(false)
+                if (!cancelled) setIsEstimating(false)
             }
+        }
+        fetchEstimate()
+
+        return () => {
+            cancelled = true
+        }
+    }, [contextProject?.path])
+
+    const handleProjectChange = (projectName: string) => {
+        const project = projects.find((item) => item.name === projectName)
+        if (project) {
+            selectProject(project)
         }
     }
 
     const fetchScans = async () => {
         try {
-            const response = await fetch('/api/scan/')
+            const response = await authFetch('/api/scan/')
             if (response.ok) {
                 const data = await response.json()
                 const scanList = Array.isArray(data) ? data : []
                 setScans(scanList)
                 const running = scanList.find((s: ScanRecord) => s.status === 'running')
-                if (running) setActiveScanId(running.id)
+                if (running) {
+                    setActiveScanId(running.id)
+                } else {
+                    setActiveScanId(null)
+                }
             }
-        } catch (err) {
-            console.error('Failed to fetch scans:', err)
+        } catch {
+            // silently fail — UI shows stale data until next fetch
         } finally {
             setIsLoading(false)
         }
     }
 
     const handleStartScan = async () => {
-        if (!path.trim()) return
+        if (!contextProject?.path) return
         setIsStarting(true)
         try {
-            const scan = await createScan(path, enableEmbeddings)
+            const scan = await createScan(contextProject.path, enableEmbeddings)
             setActiveScanId(scan.id)
-            fetchScans()
-        } catch (err) {
-            console.error('Failed to start scan:', err)
+            await fetchScans()
+            toast.success(t('scans.starting'))
+        } catch {
+            toast.error(t('scans.toast.startFailed'))
         } finally {
             setIsStarting(false)
         }
@@ -164,48 +169,101 @@ export function ScansPage() {
 
     const handleCancelScan = async (scanId: number) => {
         try {
-            await fetch(`/api/scan/${scanId}/cancel`, { method: 'POST' })
-            fetchScans()
+            await authFetch(`/api/scan/${scanId}/cancel`, { method: 'POST' })
+            await fetchScans()
             if (scanId === activeScanId) setActiveScanId(null)
-        } catch (err) {
-            console.error('Failed to cancel:', err)
+            toast.success(t('scans.toast.cancelled'))
+        } catch {
+            toast.error(t('scans.toast.cancelFailed'))
         }
     }
 
     const handleResumeScan = async (scanId: number) => {
         try {
-            await fetch(`/api/scan/${scanId}/resume`, { method: 'POST' })
-            fetchScans()
-        } catch (err) {
-            console.error('Failed to resume:', err)
+            await authFetch(`/api/scan/${scanId}/resume`, { method: 'POST' })
+            await fetchScans()
+            toast.success(t('scans.toast.resumed'))
+        } catch {
+            toast.error(t('scans.toast.resumeFailed'))
         }
     }
 
-    const handleDeleteScan = async (scanId: number) => {
+    const clearPendingDeletion = (key: string): boolean => {
+        const timerId = pendingDeletionTimersRef.current.get(key)
+        if (timerId === undefined) return false
+        window.clearTimeout(timerId)
+        pendingDeletionTimersRef.current.delete(key)
+        return true
+    }
+
+    const undoPendingDeletion = (key: string, successMessage: string) => {
+        if (clearPendingDeletion(key)) {
+            toast.success(successMessage)
+        }
+    }
+
+    const executeDeleteScan = async (scanId: number) => {
         try {
-            await fetch(`/api/scan/${scanId}`, { method: 'DELETE' })
-            fetchScans()
-        } finally {
+            await authFetch(`/api/scan/${scanId}`, { method: 'DELETE' })
+            await fetchScans()
+            toast.success(t('scans.toast.deleted'))
+        } catch {
+            toast.error(t('dashboard.toast.deleteFailed'))
+        }
+    }
+
+    const handleDeleteScan = (scanId: number) => {
+        const key = `scan:${scanId}`
+        if (pendingDeletionTimersRef.current.has(key)) {
             setScanToDelete(null)
+            toast.message(`La suppression du scan #${scanId} est déjà planifiée.`)
+            return
         }
+
+        const timerId = window.setTimeout(() => {
+            pendingDeletionTimersRef.current.delete(key)
+            void executeDeleteScan(scanId)
+        }, DELETE_DELAY_MS)
+
+        pendingDeletionTimersRef.current.set(key, timerId)
+        setScanToDelete(null)
+
+        toast.message(`Suppression du scan #${scanId} dans 5 secondes.`, {
+            description: 'Cliquez sur Undo pour annuler.',
+            action: {
+                label: 'Undo',
+                onClick: () => undoPendingDeletion(key, `Suppression du scan #${scanId} annulée.`),
+            },
+            duration: DELETE_DELAY_MS + 1000,
+        })
     }
 
-    const handleRenameScan = async (scanId: number, currentLabel: string) => {
-        const newLabel = window.prompt(t('scans.renamePrompt'), currentLabel)
-        if (newLabel === null) return
+    const openRenameDialog = (scan: ScanRecord) => {
+        setScanToRename(scan)
+        setRenameValue(scan.label || scan.path.split('/').pop() || '')
+    }
+
+    const handleRenameScan = async () => {
+        if (!scanToRename) return
+        const normalizedLabel = renameValue.trim()
+        if (!normalizedLabel) {
+            toast.error(t('scans.toast.nameRequired'))
+            return
+        }
         try {
-            await fetch(`/api/scan/${scanId}/rename`, {
+            await authFetch(`/api/scan/${scanToRename.id}/rename`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ label: newLabel })
+                body: JSON.stringify({ label: normalizedLabel })
             })
-            fetchScans()
-        } catch (err) {
-            console.error('Failed to rename:', err)
+            await fetchScans()
+            setScanToRename(null)
+            setRenameValue('')
+            toast.success(t('scans.toast.renamed'))
+        } catch {
+            toast.error(t('scans.toast.renameFailed'))
         }
     }
-
-    const formatNumber = (n: number) => n.toLocaleString()
 
     const getStatusBadge = (status: string) => {
         const styles: Record<string, { variant: 'default' | 'secondary' | 'destructive' | 'outline', label: string }> = {
@@ -219,18 +277,117 @@ export function ScansPage() {
         return <Badge variant={s.variant}>{s.label}</Badge>
     }
 
-    const formatDuration = (start: string, end?: string, seconds?: number) => {
-        let s: number
-        if (seconds !== undefined) {
-            s = seconds
-        } else {
-            const ms = (end ? new Date(end) : new Date()).getTime() - new Date(start).getTime()
-            s = Math.floor(ms / 1000)
+    const getTypeLabel = (type: string) => {
+        const key = type.toLowerCase()
+        const typeLabels: Record<string, string> = {
+            pdf: 'PDF',
+            image: t('scans.images'),
+            text: t('scans.text'),
+            video: t('scans.videos'),
+            email: t('scans.emails'),
+            unknown: t('scans.unknownType'),
         }
-        if (s < 60) return `${s}s`
-        if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
-        return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
+        return typeLabels[key] || key.toUpperCase()
     }
+
+    const handleExportFromSummary = async () => {
+        if (!activeScanId) {
+            navigate('/analysis')
+            return
+        }
+
+        setIsExportingSummary(true)
+        try {
+            const documentIds: number[] = []
+            const pageSize = 200
+            let offset = 0
+            let total = 0
+
+            do {
+                const params = new URLSearchParams({
+                    scan_id: String(activeScanId),
+                    skip: String(offset),
+                    limit: String(pageSize),
+                    sort_by: 'indexed_desc',
+                })
+                const listResponse = await authFetch(`/api/documents/?${params.toString()}`)
+                if (!listResponse.ok) throw new Error('documents_list_failed')
+
+                const payload = await listResponse.json() as {
+                    documents?: Array<{ id: number }>
+                    total?: number
+                }
+                const batch = Array.isArray(payload.documents) ? payload.documents : []
+                const batchIds = batch
+                    .map((doc) => doc.id)
+                    .filter((id): id is number => Number.isInteger(id))
+
+                documentIds.push(...batchIds)
+                total = typeof payload.total === 'number' ? payload.total : Math.max(total, offset + batch.length)
+                offset += batch.length
+
+                if (batch.length === 0) break
+            } while (offset < total)
+
+            if (documentIds.length === 0) {
+                toast.message(t('scans.postScanExportUnavailable'))
+                navigate('/analysis')
+                return
+            }
+
+            const exportResponse = await authFetch('/api/export/csv', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    document_ids: documentIds,
+                    include_content: false,
+                    include_metadata: true,
+                }),
+            })
+
+            if (!exportResponse.ok) throw new Error('export_failed')
+
+            const blob = await exportResponse.blob()
+            const disposition = exportResponse.headers.get('content-disposition') || ''
+            const filenameMatch = disposition.match(/filename="?([^"]+)"?/)
+            const filename = filenameMatch?.[1] || `archon-scan-${activeScanId}-export.csv`
+
+            const blobUrl = window.URL.createObjectURL(blob)
+            const anchor = document.createElement('a')
+            anchor.href = blobUrl
+            anchor.download = filename
+            document.body.appendChild(anchor)
+            anchor.click()
+            document.body.removeChild(anchor)
+            window.URL.revokeObjectURL(blobUrl)
+
+            toast.success(t('scans.postScanExportReady').replace('{count}', formatNumber(documentIds.length)))
+        } catch {
+            toast.message(t('scans.postScanExportFallback'))
+            navigate('/analysis')
+        } finally {
+            setIsExportingSummary(false)
+        }
+    }
+
+    const openSearchFallback = () => {
+        navigate('/analysis')
+    }
+
+    const activeScanPath = scans.find((scan) => scan.id === activeScanId)?.path ?? contextProject?.path ?? '-'
+    const processedFiles = progress?.processed_files ?? 0
+    const failedFiles = progress?.failed_files ?? 0
+    const successfulFiles = Math.max(processedFiles - failedFiles, 0)
+    const topTypes = progress?.type_counts
+        ? Object.entries(progress.type_counts)
+            .filter(([, count]) => count > 0)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+        : []
+    const totalTypeCount = progress?.type_counts
+        ? Object.values(progress.type_counts).reduce((sum, count) => sum + count, 0)
+        : 0
+    const canExportFromSummary = isComplete && successfulFiles > 0
 
     return (
         <div className="h-full p-6 space-y-6">
@@ -244,7 +401,7 @@ export function ScansPage() {
                             <p className="text-muted-foreground text-sm">{t('scans.subtitle')}</p>
                         </div>
                     </div>
-                    <Button onClick={() => fetchScans()} variant="ghost" size="sm">
+                    <Button onClick={() => { fetchScans(); refetchProjects() }} variant="ghost" size="sm">
                         <RefreshCw className="h-4 w-4 mr-2" />
                         {t('scans.refresh')}
                     </Button>
@@ -272,7 +429,7 @@ export function ScansPage() {
                                         <h2 className="text-lg font-semibold">
                                             {isComplete ? t('scans.scanComplete') : t('scans.scanInProgress')}
                                         </h2>
-                                        <p className="text-sm text-muted-foreground font-mono">{path}</p>
+                                        <p className="text-sm text-muted-foreground font-mono">{activeScanPath}</p>
                                     </div>
                                 </div>
                                 {!isComplete && (
@@ -469,12 +626,89 @@ export function ScansPage() {
                             </div>
                             
                             {isComplete && (
-                                <div className="mt-4 flex items-center gap-2 text-green-500 bg-green-500/10 rounded-lg p-3 border border-green-500/20">
-                                    <CheckCircle2 className="h-5 w-5" />
-                                    <span className="font-medium">{t('scans.scanComplete')}</span>
-                                    <span className="text-sm text-muted-foreground ml-auto">
-                                        {formatNumber(progress.processed_files)} {t('scans.filesCount')} • {formatDuration('', undefined, progress.elapsed_seconds || 0)}
-                                    </span>
+                                <div className="mt-4 space-y-3 rounded-lg border border-green-500/25 bg-green-500/5 p-4">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <CheckCircle2 className="h-5 w-5 text-green-500" />
+                                        <span className="font-medium">{t('scans.postScanSummaryTitle')}</span>
+                                        <Badge variant="outline" className="border-green-500/40 text-green-600 dark:text-green-400">
+                                            {t('scans.completed')}
+                                        </Badge>
+                                        <span className="text-xs text-muted-foreground sm:ml-auto">
+                                            {t('scans.postScanSummarySubtitle')}
+                                        </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                        <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                                            <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">{t('scans.postScanProcessed')}</div>
+                                            <div className="text-lg font-semibold tabular-nums">
+                                                {formatNumber(processedFiles)} {t('scans.filesCount')}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                                            <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">{t('scans.postScanErrors')}</div>
+                                            <div className={`text-lg font-semibold tabular-nums ${failedFiles > 0 ? 'text-red-500' : 'text-green-500'}`}>
+                                                {formatNumber(failedFiles)}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                                            <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">{t('scans.postScanDuration')}</div>
+                                            <div className="text-lg font-semibold tabular-nums">
+                                                {formatDuration('', undefined, progress.elapsed_seconds || 0)}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                                        <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">{t('scans.postScanTopTypes')}</div>
+                                        {topTypes.length > 0 ? (
+                                            <div className="flex flex-wrap gap-2">
+                                                {topTypes.map(([type, count]) => {
+                                                    const ratio = totalTypeCount > 0 ? Math.round((count / totalTypeCount) * 100) : 0
+                                                    return (
+                                                        <Badge key={type} variant="secondary" className="font-normal">
+                                                            {getTypeLabel(type)} • {formatNumber(count)} ({ratio}%)
+                                                        </Badge>
+                                                    )
+                                                })}
+                                            </div>
+                                        ) : (
+                                            <p className="text-sm text-muted-foreground">{t('scans.postScanNoTypes')}</p>
+                                        )}
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <Button size="sm" className="gap-1.5" onClick={() => navigate('/cockpit')}>
+                                            <Database className="h-3.5 w-3.5" />
+                                            {t('scans.openCockpit')}
+                                            <ArrowRight className="h-3.5 w-3.5" />
+                                        </Button>
+                                        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate('/gallery')}>
+                                            <Image className="h-3.5 w-3.5" />
+                                            {t('nav.gallery')}
+                                        </Button>
+                                        {canExportFromSummary ? (
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="gap-1.5"
+                                                onClick={handleExportFromSummary}
+                                                disabled={isExportingSummary}
+                                            >
+                                                {isExportingSummary ? (
+                                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                ) : (
+                                                    <FileDown className="h-3.5 w-3.5" />
+                                                )}
+                                                {isExportingSummary ? t('scans.postScanExporting') : t('scans.postScanExport')}
+                                            </Button>
+                                        ) : (
+                                            <Button variant="outline" size="sm" className="gap-1.5" onClick={openSearchFallback}>
+                                                <FolderSearch className="h-3.5 w-3.5" />
+                                                {t('scans.postScanFallbackSearch')}
+                                            </Button>
+                                        )}
+                                    </div>
                                 </div>
                             )}
                         </CardContent>
@@ -491,22 +725,20 @@ export function ScansPage() {
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-4">
-                            {/* Project Selector */}
                             <div className="flex gap-4">
                                 <div className="flex-1">
-                                    <Label className="mb-2 block">{t('scans.projectToScan')}</Label>
                                     {isLoadingProjects ? (
                                         <div className="flex items-center gap-2 text-sm text-muted-foreground h-10">
                                             <Loader2 className="h-4 w-4 animate-spin" />
                                             {t('scans.loading')}
                                         </div>
                                     ) : (
-                                        <Select value={selectedProject} onValueChange={handleProjectChange}>
+                                        <Select value={contextProject?.name} onValueChange={handleProjectChange}>
                                             <SelectTrigger>
                                                 <SelectValue placeholder={t('scans.selectProject')} />
                                             </SelectTrigger>
                                             <SelectContent>
-                                                {projects.map(project => (
+                                                {projects.map((project) => (
                                                     <SelectItem key={project.name} value={project.name}>
                                                         <span className="flex items-center gap-2">
                                                             <FolderSearch className="h-4 w-4" />
@@ -521,11 +753,11 @@ export function ScansPage() {
                                         </Select>
                                     )}
                                 </div>
-                                
+
                                 <Button
                                     size="lg"
                                     onClick={handleStartScan}
-                                    disabled={!selectedProject || isStarting || isEstimating}
+                                    disabled={!contextProject || isStarting || isEstimating}
                                     className="self-end"
                                 >
                                     {isStarting ? (
@@ -535,170 +767,15 @@ export function ScansPage() {
                                     )}
                                 </Button>
                             </div>
-                            
-                            {/* Estimation */}
-                            {isEstimating && (
-                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    {t('scans.estimating')}
-                                </div>
-                            )}
-                            
-                            {estimate && !isEstimating && (
-                                <div className="space-y-4">
-                                    {/* File counts */}
-                                    <div className="grid grid-cols-5 gap-3 p-4 rounded-lg bg-muted/50">
-                                        <div className="text-center">
-                                            <div className="text-xl font-semibold">{formatNumber(estimate.file_count)}</div>
-                                            <div className="text-xs text-muted-foreground">{t('scans.total')}</div>
-                                        </div>
-                                        <div className="text-center">
-                                            <div className="text-xl font-semibold flex items-center justify-center gap-1">
-                                                <FileText className="h-4 w-4 text-red-500" />
-                                                {formatNumber(estimate.type_counts?.pdf || 0)}
-                                            </div>
-                                            <div className="text-xs text-muted-foreground">PDF</div>
-                                        </div>
-                                        <div className="text-center">
-                                            <div className="text-xl font-semibold flex items-center justify-center gap-1">
-                                                <Image className="h-4 w-4 text-blue-500" />
-                                                {formatNumber(estimate.type_counts?.image || 0)}
-                                            </div>
-                                            <div className="text-xs text-muted-foreground">{t('scans.images')}</div>
-                                        </div>
-                                        <div className="text-center">
-                                            <div className="text-xl font-semibold flex items-center justify-center gap-1">
-                                                <FileText className="h-4 w-4 text-green-500" />
-                                                {formatNumber(estimate.type_counts?.text || 0)}
-                                            </div>
-                                            <div className="text-xs text-muted-foreground">{t('scans.text')}</div>
-                                        </div>
-                                        <div className="text-center">
-                                            <div className="text-xl font-semibold flex items-center justify-center gap-1">
-                                                <Video className="h-4 w-4 text-purple-500" />
-                                                {formatNumber(estimate.type_counts?.video || 0)}
-                                            </div>
-                                            <div className="text-xs text-muted-foreground">{t('scans.videos')}</div>
-                                        </div>
-                                    </div>
-                                    
-                                    {/* Size and cost */}
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <div className="p-3 rounded-lg border bg-card">
-                                            <div className="text-sm text-muted-foreground">{t('scans.totalSize')}</div>
-                                            <div className="text-lg font-semibold">
-                                                {estimate.size_mb >= 1000 
-                                                    ? `${(estimate.size_mb / 1024).toFixed(1)} Go`
-                                                    : `${estimate.size_mb?.toFixed(1)} Mo`
-                                                }
-                                            </div>
-                                        </div>
-                                        {estimate.embedding_estimate && (
-                                            <div className="p-3 rounded-lg border bg-card">
-                                                <div className="text-sm text-muted-foreground">{t('scans.embeddingsCost')}</div>
-                                                <div className="text-lg font-semibold flex items-center gap-2">
-                                                    <span className={estimate.embedding_estimate.free_tier_available ? 'text-green-500' : 'text-orange-500'}>
-                                                        {estimate.embedding_estimate.free_tier_available 
-                                                            ? t('scans.free')
-                                                            : `$${estimate.embedding_estimate.estimated_cost_usd?.toFixed(2)}`
-                                                        }
-                                                    </span>
-                                                </div>
-                                                <div className="text-xs text-muted-foreground mt-1">
-                                                    {formatNumber(estimate.embedding_estimate.estimated_tokens || 0)} {t('scans.tokens')}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                    
-                                    {estimate.sampled && (
-                                        <div className="text-xs text-muted-foreground text-center">
-                                            {t('scans.sampleEstimate')}
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                            
-                            {/* Advanced Options */}
-                            <Collapsible open={showOptions} onOpenChange={setShowOptions}>
-                                <CollapsibleTrigger asChild>
-                                    <Button variant="ghost" size="sm" className="w-full justify-between">
-                                        {t('scans.advancedOptions')}
-                                        <ChevronDown className={`h-4 w-4 transition-transform ${showOptions ? 'rotate-180' : ''}`} />
-                                    </Button>
-                                </CollapsibleTrigger>
-                                <CollapsibleContent className="pt-4 space-y-4">
-                                    {/* File Types */}
-                                    <div className="space-y-2">
-                                        <Label className="text-sm font-medium">{t('scans.fileTypes')}</Label>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            {[
-                                                { key: 'pdf', label: 'PDF', icon: FileText, color: 'text-red-500' },
-                                                { key: 'image', label: t('scans.images'), icon: Image, color: 'text-blue-500' },
-                                                { key: 'text', label: t('scans.text'), icon: FileText, color: 'text-green-500' },
-                                                { key: 'video', label: t('scans.videos'), icon: Video, color: 'text-purple-500' },
-                                            ].map(({ key, label, icon: Icon, color }) => (
-                                                <div key={key} className="flex items-center justify-between p-2 rounded border">
-                                                    <span className="flex items-center gap-2 text-sm">
-                                                        <Icon className={`h-4 w-4 ${color}`} />
-                                                        {label}
-                                                    </span>
-                                                    <Switch 
-                                                        checked={scanTypes[key as keyof typeof scanTypes]} 
-                                                        onCheckedChange={(v: boolean) => setScanTypes(prev => ({ ...prev, [key]: v }))}
-                                                    />
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                    
-                                    {/* OCR */}
-                                    <div className="flex items-center justify-between p-3 rounded-lg border">
-                                        <div className="flex items-center gap-3">
-                                            <FileText className="h-5 w-5 text-blue-500" />
-                                            <div>
-                                                <div className="font-medium">OCR</div>
-                                                <div className="text-xs text-muted-foreground">{t('scans.ocrDesc')}</div>
-                                            </div>
-                                        </div>
-                                        <Switch checked={enableOcr} onCheckedChange={setEnableOcr} />
-                                    </div>
-                                    
-                                    {/* Embeddings */}
-                                    <div className="flex items-center justify-between p-3 rounded-lg border">
-                                        <div className="flex items-center gap-3">
-                                            <Zap className="h-5 w-5 text-purple-500" />
-                                            <div>
-                                                <div className="font-medium">{t('scans.aiEmbeddings')}</div>
-                                                <div className="text-xs text-muted-foreground">{t('scans.semanticSearch')}</div>
-                                            </div>
-                                        </div>
-                                        <Switch checked={enableEmbeddings} onCheckedChange={setEnableEmbeddings} />
-                                    </div>
-                                    
-                                    {enableEmbeddings && (
-                                        <div className="ml-8 p-3 rounded-lg border bg-muted/50">
-                                            <Label className="text-sm">{t('scans.tier')}</Label>
-                                            <div className="flex gap-2 mt-2">
-                                                <Button
-                                                    variant={embeddingTier === 'free' ? 'default' : 'outline'}
-                                                    size="sm"
-                                                    onClick={() => setEmbeddingTier('free')}
-                                                >
-                                                    {t('scans.freeTier')}
-                                                </Button>
-                                                <Button
-                                                    variant={embeddingTier === 'paid' ? 'default' : 'outline'}
-                                                    size="sm"
-                                                    onClick={() => setEmbeddingTier('paid')}
-                                                >
-                                                    {t('scans.paidTier')}
-                                                </Button>
-                                            </div>
-                                        </div>
-                                    )}
-                                </CollapsibleContent>
-                            </Collapsible>
+
+                            <ScanConfigPanel
+                                projectName={contextProject?.name}
+                                projectPath={contextProject?.path}
+                                estimate={estimate}
+                                isEstimating={isEstimating}
+                                enableEmbeddings={enableEmbeddings}
+                                onEnableEmbeddingsChange={setEnableEmbeddings}
+                            />
                         </CardContent>
                     </Card>
                 )}
@@ -778,7 +855,7 @@ export function ScansPage() {
                                             <Button variant="ghost" size="sm" onClick={() => { setSelectedScanId(scan.id); setShowScanDetail(true) }}>
                                                 <Eye className="h-4 w-4" />
                                             </Button>
-                                            <Button variant="ghost" size="sm" onClick={() => handleRenameScan(scan.id, scan.label || scan.path.split('/').pop() || '')}>
+                                            <Button variant="ghost" size="sm" onClick={() => openRenameDialog(scan)}>
                                                 <Pencil className="h-4 w-4" />
                                             </Button>
                                             <Button variant="ghost" size="sm" onClick={() => setScanToDelete(scan.id)} className="text-red-500">
@@ -798,6 +875,34 @@ export function ScansPage() {
                 open={showScanDetail}
                 onClose={() => setShowScanDetail(false)}
             />
+
+            <AlertDialog
+                open={scanToRename !== null}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setScanToRename(null)
+                        setRenameValue('')
+                    }
+                }}
+            >
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>{t('dashboard.renameScanTitle')}</AlertDialogTitle>
+                    </AlertDialogHeader>
+                    <Input
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        placeholder={t('dashboard.renameScanPlaceholder')}
+                        className="my-2"
+                    />
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                        <AlertDialogAction onClick={handleRenameScan}>
+                            {t('common.save')}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
             
             <AlertDialog open={scanToDelete !== null} onOpenChange={(open) => !open && setScanToDelete(null)}>
                 <AlertDialogContent>

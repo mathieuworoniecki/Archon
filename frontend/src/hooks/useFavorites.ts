@@ -50,8 +50,8 @@ export function useFavorite({ documentId }: UseFavoriteProps) {
                 setIsFavorite(true)
                 setFavoriteId(fav.id)
             }
-        } catch (err) {
-            console.error('Failed to toggle favorite:', err)
+        } catch {
+            // Error is absorbed — toggle optimistically reverts on next status check
         } finally {
             setIsLoading(false)
         }

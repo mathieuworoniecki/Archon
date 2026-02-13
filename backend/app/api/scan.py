@@ -3,98 +3,179 @@ Archon Backend - Scan API Routes
 """
 from datetime import datetime, timezone
 from typing import List, Optional
+import hashlib
+import threading
+from contextlib import contextmanager
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from celery.result import AsyncResult
 
 from ..database import get_db
-from ..models import Scan, ScanStatus
+from ..models import Scan, ScanStatus, User
 from ..schemas import ScanCreate, ScanOut, ScanProgress
 from ..workers.celery_app import celery_app
 from ..workers.tasks import run_scan
+from ..utils.auth import get_current_user, require_role
+from ..utils.paths import normalize_scan_path
+from ..telemetry.request_context import get_request_id
 
 router = APIRouter(prefix="/scan", tags=["scan"])
+_scan_path_locks: dict[str, threading.Lock] = {}
+_scan_path_locks_guard = threading.Lock()
+
+
+def _raise_path_http_error(exc: Exception) -> None:
+    """Map path validation errors to stable API responses."""
+    if isinstance(exc, PermissionError):
+        raise HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, (FileNotFoundError, NotADirectoryError)):
+        raise HTTPException(status_code=400, detail=str(exc))
+    raise HTTPException(status_code=400, detail=f"Invalid path: {exc}")
+
+
+def _acquire_scan_path_lock(db: Session, normalized_path: str) -> None:
+    """
+    Serialize create-scan operations for the same path on PostgreSQL.
+
+    Uses transaction-scoped advisory lock to avoid duplicate RUNNING/PENDING scans
+    under concurrent requests.
+    """
+    bind = db.get_bind()
+    if bind is None or bind.dialect.name != "postgresql":
+        return
+
+    lock_key = int.from_bytes(
+        hashlib.sha256(normalized_path.encode("utf-8")).digest()[:8],
+        byteorder="big",
+        signed=False,
+    ) & 0x7FFF_FFFF_FFFF_FFFF
+
+    db.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": lock_key})
+
+
+def _acquire_local_scan_path_lock(normalized_path: str) -> threading.Lock:
+    """
+    Acquire an in-process lock for scan creation on the same normalized path.
+
+    This protects SQLite/dev setups where advisory DB locks are unavailable.
+    """
+    with _scan_path_locks_guard:
+        lock = _scan_path_locks.get(normalized_path)
+        if lock is None:
+            lock = threading.Lock()
+            _scan_path_locks[normalized_path] = lock
+    lock.acquire()
+    return lock
+
+
+@contextmanager
+def _scan_creation_lock(db: Session, normalized_path: str):
+    """
+    Serialize create-scan requests for a given path.
+
+    - Always use a local process lock (covers SQLite and single-process double clicks).
+    - Also use PostgreSQL advisory locks when available (covers multi-process workers).
+    """
+    local_lock = _acquire_local_scan_path_lock(normalized_path)
+    try:
+        _acquire_scan_path_lock(db, normalized_path)
+        yield
+    finally:
+        local_lock.release()
 
 
 @router.post("/", response_model=ScanOut)
-def create_scan(scan_in: ScanCreate, db: Session = Depends(get_db)):
+def create_scan(scan_in: ScanCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Create and launch a new scan.
     
     The scan runs in the background via Celery.
     """
-    from pathlib import Path
-    
-    # Validate path exists
-    path = Path(scan_in.path)
-    if not path.exists():
-        raise HTTPException(status_code=400, detail=f"Path does not exist: {scan_in.path}")
-    
-    # Cancel any existing running/pending scans for the same path
-    existing_running = db.query(Scan).filter(
-        Scan.path == str(path.absolute()),
-        Scan.status.in_([ScanStatus.RUNNING, ScanStatus.PENDING])
-    ).all()
-    for existing in existing_running:
-        existing.status = ScanStatus.CANCELLED
-        if existing.celery_task_id:
-            try:
-                from app.workers.celery_app import celery_app
-                celery_app.control.revoke(existing.celery_task_id, terminate=True)
-            except Exception:
-                pass
-    if existing_running:
+    try:
+        normalized_path = normalize_scan_path(scan_in.path)
+    except Exception as exc:
+        _raise_path_http_error(exc)
+        raise  # pragma: no cover
+
+    normalized_path_str = str(normalized_path)
+
+    with _scan_creation_lock(db, normalized_path_str):
+        # Reuse active scan instead of creating a concurrent duplicate.
+        existing_active = db.query(Scan).filter(
+            Scan.path == normalized_path_str,
+            Scan.status.in_([ScanStatus.RUNNING, ScanStatus.PENDING]),
+        ).order_by(Scan.created_at.desc()).first()
+        if existing_active:
+            return existing_active
+
+        # Create scan record.
+        scan = Scan(
+            path=normalized_path_str,
+            status=ScanStatus.PENDING,
+            enable_embeddings=1 if scan_in.enable_embeddings else 0,
+        )
+        db.add(scan)
         db.commit()
-    
-    # Create scan record
-    scan = Scan(
-        path=str(path.absolute()),
-        status=ScanStatus.PENDING,
-        enable_embeddings=1 if scan_in.enable_embeddings else 0
-    )
-    db.add(scan)
-    db.commit()
-    db.refresh(scan)
-    
-    # Launch Celery task with embeddings option
-    task = run_scan.delay(scan.id, enable_embeddings=scan_in.enable_embeddings)
-    
-    # Update with task ID
+        db.refresh(scan)
+
+    # Launch Celery task with embeddings option.
+    try:
+        task = run_scan.delay(
+            scan.id,
+            enable_embeddings=scan_in.enable_embeddings,
+            request_id=get_request_id(),
+        )
+    except Exception as exc:
+        scan.status = ScanStatus.FAILED
+        scan.error_message = f"Failed to enqueue scan task: {exc}"
+        scan.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=503, detail="Failed to enqueue scan task")
+
+    # Update with task ID.
     scan.celery_task_id = task.id
     db.commit()
     db.refresh(scan)
-    
+
     return scan
 
 
 @router.post("/estimate")
-def estimate_scan(path: str):
+def estimate_scan(path: str, current_user: User = Depends(get_current_user)):
     """
     Estimate scan costs and file count before launching.
     
     OPTIMIZED VERSION (Feb 2026):
     - Redis cache (TTL 5 minutes)
-    - Subprocess find/du for fast counting (native C)
-    - Intelligent sampling by subdirectories
-    - os.scandir instead of os.walk for samples
+    - Single recursive pass (no duplicate traversal)
+    - Time + directory safeguards on very large trees
+    - Intelligent sampling for type distribution
     
     Target: < 5 seconds for 1.5M documents
     """
-    from pathlib import Path
     import os
     import json
-    import hashlib
     import redis
-    
-    target_path = Path(path)
-    if not target_path.exists():
-        raise HTTPException(status_code=400, detail=f"Path does not exist: {path}")
+    import time
+
+    try:
+        target_path = normalize_scan_path(path)
+    except Exception as exc:
+        _raise_path_http_error(exc)
+        raise  # pragma: no cover
+
+    normalized_path_str = str(target_path)
+    try:
+        root_stat = target_path.stat()
+        root_signature = f"{normalized_path_str}:{root_stat.st_mtime_ns}:{root_stat.st_size}"
+    except OSError:
+        root_signature = normalized_path_str
     
     # ========================================
     # 1. CHECK REDIS CACHE
     # ========================================
-    cache_key = f"scan_estimate:{hashlib.md5(path.encode()).hexdigest()}"
+    cache_key = f"scan_estimate:{hashlib.md5(root_signature.encode()).hexdigest()}"
     try:
         r = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
         cached = r.get(cache_key)
@@ -106,109 +187,106 @@ def estimate_scan(path: str):
         r = None  # Redis not available, continue without cache
     
     # ========================================
-    # 2. FAST FILE COUNT (safe, no shell injection)
+    # 2. SINGLE PASS COUNT + SAMPLING (bounded)
     # ========================================
     supported_extensions = {
         '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp',
         '.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.log',
         '.mp4', '.webm', '.mov', '.avi', '.mkv'
     }
-    
-    file_count = 0
-    size_bytes = 0
-    
-    try:
-        # Safe counting via os.walk — no shell injection possible
-        for root, dirs, files in os.walk(target_path):
-            dirs[:] = [d for d in dirs if not d.startswith('.')]
-            for filename in files:
-                if filename.startswith('.'):
-                    continue
-                ext = os.path.splitext(filename)[1].lower()
-                if ext in supported_extensions:
-                    file_count += 1
-                    try:
-                        size_bytes += os.path.getsize(os.path.join(root, filename))
-                    except OSError:
-                        pass
-                # Safety: stop counting after 2M files to avoid long waits
-                if file_count >= 2_000_000:
-                    break
-            if file_count >= 2_000_000:
-                break
-    except (OSError, PermissionError):
-        file_count = 0
-    
-    # ========================================
-    # 3. INTELLIGENT SAMPLING FOR TYPE BREAKDOWN
-    # ========================================
-    type_counts = {"pdf": 0, "image": 0, "text": 0, "video": 0}
-    sample_count = 0
-    MAX_SAMPLE = 2000
-    
+
     def categorize_ext(ext):
         ext = ext.lower()
         if ext == '.pdf':
             return 'pdf'
-        elif ext in {'.mp4', '.webm', '.mov', '.avi', '.mkv'}:
+        if ext in {'.mp4', '.webm', '.mov', '.avi', '.mkv'}:
             return 'video'
-        elif ext in {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp'}:
+        if ext in {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp'}:
             return 'image'
-        elif ext in {'.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.log'}:
+        if ext in {'.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.log'}:
             return 'text'
         return None
     
+    file_count = 0
+    size_bytes = 0
+    type_counts = {"pdf": 0, "image": 0, "text": 0, "video": 0}
+    sample_count = 0
+    MAX_SAMPLE = 2000
+    MAX_ESTIMATE_SECONDS = 5.0
+    MAX_ESTIMATE_DIRS = 10_000
+    MAX_ESTIMATE_DEPTH = 32
+    ignored_dirs = {
+        ".git", "node_modules", "__pycache__", ".venv", "venv",
+        ".pytest_cache", ".mypy_cache",
+    }
+    estimate_start = time.monotonic()
+    visited_dirs = 0
+    incomplete = False
+    incomplete_reason = None
+
     try:
-        # Use os.walk for FULL recursive sampling - scandir was only first level!
         for root, dirs, files in os.walk(target_path):
-            # Skip hidden directories
-            dirs[:] = [d for d in dirs if not d.startswith('.')]
-            
+            visited_dirs += 1
+            if visited_dirs > MAX_ESTIMATE_DIRS:
+                incomplete = True
+                incomplete_reason = "max_dirs_reached"
+                break
+            if time.monotonic() - estimate_start > MAX_ESTIMATE_SECONDS:
+                incomplete = True
+                incomplete_reason = "max_time_reached"
+                break
+
+            rel_root = os.path.relpath(root, target_path)
+            depth = 0 if rel_root == "." else rel_root.count(os.sep) + 1
+            if depth > MAX_ESTIMATE_DEPTH:
+                incomplete = True
+                incomplete_reason = "max_depth_reached"
+                dirs[:] = []
+                continue
+
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ignored_dirs]
+
             for filename in files:
                 if filename.startswith('.'):
                     continue
-                    
-                ext = os.path.splitext(filename)[1]
+
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in supported_extensions:
+                    continue
+
+                file_count += 1
                 cat = categorize_ext(ext)
-                if cat:
+                if cat and sample_count < MAX_SAMPLE:
                     type_counts[cat] += 1
                     sample_count += 1
-                    
-                    # Get size from sample if subprocess failed
-                    if size_bytes == 0 and sample_count <= 500:
-                        try:
-                            size_bytes += os.path.getsize(os.path.join(root, filename))
-                        except OSError:
-                            pass
-                
-                # Stop after MAX_SAMPLE files sampled
-                if sample_count >= MAX_SAMPLE:
+
+                try:
+                    size_bytes += os.path.getsize(os.path.join(root, filename))
+                except OSError:
+                    pass
+
+                # Hard stop to avoid very long requests.
+                if file_count >= 2_000_000:
+                    incomplete = True
+                    incomplete_reason = "max_files_reached"
                     break
-            
-            if sample_count >= MAX_SAMPLE:
+
+            if incomplete:
                 break
-                
+
     except Exception:
         pass
     
     # ========================================
-    # 4. EXTRAPOLATE TYPE COUNTS
+    # 3. EXTRAPOLATE TYPE COUNTS
     # ========================================
     if sample_count > 0 and file_count > sample_count:
         ratio = file_count / sample_count
         for key in type_counts:
             type_counts[key] = int(type_counts[key] * ratio)
-        
-        # Extrapolate size if we only have sample
-        if size_bytes < 1024 * 1024:  # Less than 1MB means we only sampled
-            avg_size = size_bytes / sample_count if sample_count > 0 else 50000
-            size_bytes = int(avg_size * file_count)
-    elif file_count == 0:
-        # Subprocess failed, use sample count
-        file_count = sample_count
     
     # ========================================
-    # 5. CALCULATE COSTS
+    # 4. CALCULATE COSTS
     # ========================================
     estimated_tokens = file_count * 500
     PRICE_PER_MILLION = 0.15  # USD for Gemini embeddings
@@ -220,6 +298,8 @@ def estimate_scan(path: str):
         "size_mb": round(size_bytes / (1024 * 1024), 1),
         "type_counts": type_counts,
         "sampled": sample_count < file_count,
+        "incomplete": incomplete,
+        "incomplete_reason": incomplete_reason,
         "cached": False,
         "embedding_estimate": {
             "estimated_tokens": estimated_tokens,
@@ -230,7 +310,7 @@ def estimate_scan(path: str):
     }
     
     # ========================================
-    # 6. CACHE RESULT
+    # 5. CACHE RESULT
     # ========================================
     if r:
         try:
@@ -246,7 +326,8 @@ def list_scans(
     skip: int = 0,
     limit: int = 20,
     status: Optional[ScanStatus] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """List all scans with optional status filter."""
     query = db.query(Scan)
@@ -259,7 +340,7 @@ def list_scans(
 
 
 @router.get("/{scan_id}", response_model=ScanOut)
-def get_scan(scan_id: int, db: Session = Depends(get_db)):
+def get_scan(scan_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get scan details including errors."""
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
@@ -268,7 +349,7 @@ def get_scan(scan_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{scan_id}/progress", response_model=ScanProgress)
-def get_scan_progress(scan_id: int, db: Session = Depends(get_db)):
+def get_scan_progress(scan_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get real-time scan progress from Celery task."""
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
@@ -299,7 +380,7 @@ def get_scan_progress(scan_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{scan_id}/stream")
-async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db)):
+async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Stream real-time scan progress via Server-Sent Events (SSE).
     
@@ -440,7 +521,7 @@ async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{scan_id}")
-def delete_scan(scan_id: int, db: Session = Depends(get_db)):
+def delete_scan(scan_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_role("admin", "analyst"))):
     """Delete a scan and its documents."""
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
@@ -481,7 +562,7 @@ class ScanRenameRequest(PydanticBaseModel):
 
 
 @router.patch("/{scan_id}/rename")
-def rename_scan(scan_id: int, body: ScanRenameRequest, db: Session = Depends(get_db)):
+def rename_scan(scan_id: int, body: ScanRenameRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Rename a scan with a user-friendly label."""
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
@@ -494,7 +575,7 @@ def rename_scan(scan_id: int, body: ScanRenameRequest, db: Session = Depends(get
 
 
 @router.post("/{scan_id}/cancel")
-def cancel_scan(scan_id: int, db: Session = Depends(get_db)):
+def cancel_scan(scan_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Cancel a running scan."""
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
@@ -515,7 +596,7 @@ def cancel_scan(scan_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{scan_id}/resume", response_model=ScanOut)
-def resume_scan(scan_id: int, db: Session = Depends(get_db)):
+def resume_scan(scan_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Resume an interrupted or failed scan.
     
@@ -524,6 +605,13 @@ def resume_scan(scan_id: int, db: Session = Depends(get_db)):
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Re-validate persisted path before resuming any background task.
+    try:
+        scan.path = str(normalize_scan_path(scan.path))
+    except Exception as exc:
+        _raise_path_http_error(exc)
+        raise  # pragma: no cover
     
     # Only allow resume for failed, cancelled, or interrupted scans
     if scan.status not in [ScanStatus.FAILED, ScanStatus.CANCELLED]:
@@ -552,7 +640,12 @@ def resume_scan(scan_id: int, db: Session = Depends(get_db)):
     db.commit()
     
     # Launch Celery task with resume flag + embeddings option
-    task = run_scan.delay(scan.id, resume=True, enable_embeddings=bool(scan.enable_embeddings))
+    task = run_scan.delay(
+        scan.id,
+        resume=True,
+        enable_embeddings=bool(scan.enable_embeddings),
+        request_id=get_request_id(),
+    )
     
     # Update with new task ID
     scan.celery_task_id = task.id
@@ -564,7 +657,7 @@ def resume_scan(scan_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/interrupted", response_model=List[ScanOut])
-def list_interrupted_scans(db: Session = Depends(get_db)):
+def list_interrupted_scans(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """List all scans that can be resumed (failed or cancelled)."""
     scans = db.query(Scan).filter(
         Scan.status.in_([ScanStatus.FAILED, ScanStatus.CANCELLED])
@@ -573,7 +666,7 @@ def list_interrupted_scans(db: Session = Depends(get_db)):
 
 
 @router.post("/factory-reset")
-def factory_reset(db: Session = Depends(get_db)):
+def factory_reset(db: Session = Depends(get_db), current_user: User = Depends(require_role("admin"))):
     """
     Factory reset — delete ALL data.
     Kills running tasks, clears database, MeiliSearch, Qdrant, and Redis.
@@ -671,4 +764,3 @@ def factory_reset(db: Session = Depends(get_db)):
         "deleted_scans": scan_count,
         "deleted_documents": doc_count
     }
-

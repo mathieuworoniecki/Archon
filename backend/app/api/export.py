@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from ..database import get_db
-from ..models import Document
+from ..models import Document, User
+from ..utils.auth import get_current_user, require_role
 
 router = APIRouter(prefix="/export", tags=["export"])
 
@@ -28,7 +29,8 @@ class ExportRequest(BaseModel):
 @router.post("/csv")
 def export_csv(
     request: ExportRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Export selected documents as CSV file.
@@ -94,7 +96,8 @@ def export_csv(
 @router.post("/pdf")
 def export_pdf(
     request: ExportRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Export selected documents as PDF report.
@@ -166,7 +169,8 @@ def export_pdf(
 def export_search_results_csv(
     query: str = Query(..., description="Search query"),
     limit: int = Query(100, le=1000),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Export search results directly as CSV.
@@ -263,7 +267,8 @@ def _make_bates(prefix: str, number: int, padding: int = 7) -> str:
 @router.post("/dat")
 def export_dat(
     request: DATExportRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Export selected documents as Concordance DAT load file.
@@ -343,7 +348,8 @@ def export_dat(
 @router.post("/opt")
 def export_opt(
     request: DATExportRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Export selected documents as Opticon OPT load file.
@@ -410,7 +416,8 @@ class RedactedPDFRequest(BaseModel):
 @router.post("/redacted-pdf")
 def export_redacted_pdf(
     request: RedactedPDFRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "analyst"))
 ):
     """
     Export documents as a single PDF with:

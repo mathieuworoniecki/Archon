@@ -1,4 +1,4 @@
-import { FileText, Image, FileType2, Calendar, SortDesc } from 'lucide-react'
+import { FileText, Image, FileType2, Calendar, SortDesc, Video } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { FileType, SortBy } from '@/lib/api'
@@ -17,13 +17,15 @@ interface BrowseFiltersProps {
     onSetDateRange: (from?: string, to?: string) => void
     onSetSortBy: (sort: SortBy) => void
     onClear: () => void
-    documentsByType?: { pdf: number; image: number; text: number; unknown: number }
+    documentsByType?: { pdf: number; image: number; text: number; video: number; email?: number; unknown: number }
 }
 
 const FILE_TYPE_CONFIG: { type: FileType; label: string; icon: React.ElementType; color: string }[] = [
     { type: 'pdf', label: 'PDF', icon: FileText, color: 'text-red-500' },
     { type: 'image', label: 'Images', icon: Image, color: 'text-blue-500' },
     { type: 'text', label: 'Texte', icon: FileType2, color: 'text-green-500' },
+    { type: 'video', label: 'Videos', icon: Video, color: 'text-purple-500' },
+    { type: 'unknown', label: 'Autres', icon: FileType2, color: 'text-muted-foreground' },
 ]
 
 const DATE_PRESETS = [

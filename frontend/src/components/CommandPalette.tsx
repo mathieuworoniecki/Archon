@@ -13,6 +13,7 @@ interface PaletteItem {
     icon: React.ReactNode
     action: () => void
     shortcut?: string
+    description?: string
 }
 
 const RECENT_SEARCHES_KEY = 'archon_recent_searches'
@@ -43,13 +44,14 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
     const navigate = useNavigate()
 
     const navItems: PaletteItem[] = useMemo(() => [
-        { id: 'nav-dashboard', label: 'Projets / Dashboard', section: 'navigation', icon: <LayoutDashboard className="h-4 w-4" />, action: () => { navigate('/'); onClose() }, shortcut: 'N' },
-        { id: 'nav-search', label: 'Recherche', section: 'navigation', icon: <Search className="h-4 w-4" />, action: () => { navigate('/cockpit'); onClose() } },
-        { id: 'nav-timeline', label: 'Timeline', section: 'navigation', icon: <Calendar className="h-4 w-4" />, action: () => { navigate('/timeline'); onClose() }, shortcut: 'T' },
-        { id: 'nav-gallery', label: 'Galerie', section: 'navigation', icon: <Image className="h-4 w-4" />, action: () => { navigate('/gallery'); onClose() }, shortcut: 'G' },
-        { id: 'nav-chat', label: 'Chat IA', section: 'navigation', icon: <Sparkles className="h-4 w-4" />, action: () => { navigate('/chat'); onClose() } },
-        { id: 'nav-favorites', label: 'Favoris', section: 'navigation', icon: <Star className="h-4 w-4" />, action: () => { navigate('/favorites'); onClose() } },
-        { id: 'nav-scans', label: 'Scans', section: 'navigation', icon: <Scan className="h-4 w-4" />, action: () => { navigate('/scans'); onClose() } },
+        { id: 'nav-dashboard', label: 'Projets / Dashboard', description: 'Changer de projet ou voir l’état des scans', section: 'navigation', icon: <LayoutDashboard className="h-4 w-4" />, action: () => { navigate('/projects'); onClose() }, shortcut: 'N' },
+        { id: 'nav-search', label: 'Recherche', description: 'Recherche par mot-clé ou sens (IA)', section: 'navigation', icon: <Search className="h-4 w-4" />, action: () => { navigate('/'); onClose() } },
+        { id: 'nav-analysis', label: 'Analyse documents', description: 'Parcourir et filtrer tous les documents du projet', section: 'navigation', icon: <FileText className="h-4 w-4" />, action: () => { navigate('/analysis'); onClose() } },
+        { id: 'nav-timeline', label: 'Timeline', description: 'Explorer les documents par date', section: 'navigation', icon: <Calendar className="h-4 w-4" />, action: () => { navigate('/timeline'); onClose() }, shortcut: 'T' },
+        { id: 'nav-gallery', label: 'Galerie', description: 'Images et vidéos du projet', section: 'navigation', icon: <Image className="h-4 w-4" />, action: () => { navigate('/gallery'); onClose() }, shortcut: 'G' },
+        { id: 'nav-chat', label: 'Chat IA', description: 'Poser des questions sur vos documents', section: 'navigation', icon: <Sparkles className="h-4 w-4" />, action: () => { navigate('/chat'); onClose() } },
+        { id: 'nav-favorites', label: 'Favoris', description: 'Documents marqués et synthèse IA', section: 'navigation', icon: <Star className="h-4 w-4" />, action: () => { navigate('/favorites'); onClose() } },
+        { id: 'nav-scans', label: 'Scans', description: 'Lancer ou suivre un scan', section: 'navigation', icon: <Scan className="h-4 w-4" />, action: () => { navigate('/scans'); onClose() } },
     ], [navigate, onClose])
 
     const recentItems: PaletteItem[] = useMemo(() => {
@@ -59,7 +61,7 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
             section: 'recent' as const,
             icon: <FileText className="h-4 w-4" />,
             action: () => {
-                navigate(`/cockpit?q=${encodeURIComponent(s)}`)
+                navigate(`/?q=${encodeURIComponent(s)}`)
                 onClose()
             },
         }))
@@ -172,21 +174,28 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
                                                     onClick={item.action}
                                                     onMouseEnter={() => setActiveIndex(idx)}
                                                     className={cn(
-                                                        'flex items-center gap-3 w-full px-4 py-2.5 text-sm transition-colors',
+                                                        'flex items-center gap-3 w-full px-4 py-2.5 text-sm transition-colors text-left',
                                                         idx === activeIndex
                                                             ? 'bg-primary/10 text-foreground'
                                                             : 'text-muted-foreground hover:text-foreground'
                                                     )}
                                                 >
                                                     {item.icon}
-                                                    <span className="flex-1 text-left truncate">{item.label}</span>
+                                                    <span className="flex-1 min-w-0">
+                                                        <span className="block truncate font-medium">{item.label}</span>
+                                                        {item.description && (
+                                                            <span className="block truncate text-[11px] text-muted-foreground mt-0.5">
+                                                                {item.description}
+                                                            </span>
+                                                        )}
+                                                    </span>
                                                     {item.shortcut && (
-                                                        <kbd className="hidden sm:inline-flex h-5 items-center rounded border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
+                                                        <kbd className="hidden sm:inline-flex h-5 items-center rounded border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground shrink-0">
                                                             {item.shortcut}
                                                         </kbd>
                                                     )}
                                                     <ArrowRight className={cn(
-                                                        'h-3.5 w-3.5 transition-opacity',
+                                                        'h-3.5 w-3.5 shrink-0 transition-opacity',
                                                         idx === activeIndex ? 'opacity-100' : 'opacity-0'
                                                     )} />
                                                 </button>

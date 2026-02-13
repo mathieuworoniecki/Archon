@@ -6,14 +6,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from ..database import get_db
-from ..models import Document, Scan, ScanStatus, DocumentType
+from ..models import Document, Scan, ScanStatus, DocumentType, User
 from ..schemas import StatsResponse, DocumentsByType
+from ..utils.auth import get_current_user
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
 
 @router.get("/", response_model=StatsResponse)
-def get_stats(db: Session = Depends(get_db)):
+def get_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Get global statistics about indexed documents.
     
@@ -75,7 +76,7 @@ def get_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/stream")
-async def stream_stats(db: Session = Depends(get_db)):
+async def stream_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Stream real-time statistics via Server-Sent Events (SSE).
     

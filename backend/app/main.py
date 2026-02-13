@@ -2,9 +2,14 @@
 Archon Backend - FastAPI Main Application
 """
 import json
+import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Dict, Set
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import PlainTextResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from celery.result import AsyncResult
 
@@ -23,10 +28,17 @@ from .api.chat import router as chat_router
 from .api.projects import router as projects_router
 from .api.export import router as export_router
 from .api.auth import router as auth_router
+from .api.admin import router as admin_router
 from .api.health import router as health_router
+from .api.deep_analysis import router as deep_analysis_router
+from .api.watchlist import router as watchlist_router
+from .api.investigation_tasks import router as investigation_tasks_router
 from .workers.celery_app import celery_app
+from .telemetry.metrics import record_request, render_prometheus
+from .telemetry.request_context import set_request_id, reset_request_id, get_request_id
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -81,13 +93,20 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure CORS
+# Configure CORS — origins from config, explicit methods/headers
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:3100", "http://127.0.0.1:5173"],
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "X-Session-Id",
+        "X-Request-Id",
+        "X-Requested-With",
+    ],
 )
 
 # Include routers
@@ -104,7 +123,128 @@ app.include_router(chat_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(export_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
+app.include_router(admin_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
+app.include_router(deep_analysis_router, prefix="/api")
+app.include_router(watchlist_router, prefix="/api")
+app.include_router(investigation_tasks_router, prefix="/api")
+
+
+# Metrics middleware
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
+    token = set_request_id(request_id)
+    request.state.request_id = request_id
+
+    started = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-Id"] = request_id
+        return response
+    except Exception:
+        status_code = 500
+        raise
+    finally:
+        duration = time.perf_counter() - started
+
+        route_obj = request.scope.get("route")
+        route_path = getattr(route_obj, "path", None) or request.url.path
+        record_request(
+            method=request.method,
+            route=route_path,
+            status_code=status_code,
+            duration_seconds=duration,
+        )
+        reset_request_id(token)
+
+
+def _error_code_from_status(status_code: int) -> str:
+    if status_code == 400:
+        return "bad_request"
+    if status_code == 401:
+        return "unauthorized"
+    if status_code == 403:
+        return "forbidden"
+    if status_code == 404:
+        return "not_found"
+    if status_code == 409:
+        return "conflict"
+    if status_code == 422:
+        return "validation_error"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code >= 500:
+        return "internal_error"
+    return "request_error"
+
+
+def _error_payload(
+    status_code: int,
+    message: str,
+    details: object | None = None,
+) -> dict:
+    request_id = get_request_id()
+    payload = {
+        "code": _error_code_from_status(status_code),
+        "message": message,
+        "request_id": request_id,
+        # Keep backward compatibility for clients reading FastAPI `detail`.
+        "detail": message,
+    }
+    if details is not None:
+        payload["details"] = details
+    return payload
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    payload = _error_payload(
+        status_code=exc.status_code,
+        message=str(exc.detail),
+        details=exc.detail if isinstance(exc.detail, (dict, list)) else None,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=payload,
+        headers={"X-Request-Id": get_request_id(), **(exc.headers or {})},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    payload = _error_payload(
+        status_code=422,
+        message="Request validation failed",
+        details=exc.errors(),
+    )
+    return JSONResponse(
+        status_code=422,
+        content=payload,
+        headers={"X-Request-Id": get_request_id()},
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled API exception: %s", exc)
+    payload = _error_payload(
+        status_code=500,
+        message="Internal server error",
+    )
+    return JSONResponse(
+        status_code=500,
+        content=payload,
+        headers={"X-Request-Id": get_request_id()},
+    )
+
+
+@app.get("/metrics")
+def metrics():
+    """Prometheus-style operational metrics."""
+    return PlainTextResponse(render_prometheus(), media_type="text/plain; version=0.0.4")
 
 
 # WebSocket connection manager
@@ -146,13 +286,30 @@ manager = ConnectionManager()
 async def websocket_scan_progress(websocket: WebSocket, scan_id: int):
     """
     WebSocket endpoint for real-time scan progress updates.
-    
-    Clients can connect to receive progress, errors, and completion events.
+
+    Clients must provide a valid JWT token as a query parameter:
+    ws://host/ws/scan/1?token=<jwt_token>
     """
     import asyncio
     from .database import SessionLocal
     from .models import Scan, ScanStatus
-    
+
+    # ── WebSocket Authentication ──
+    if not settings.disable_auth:
+        token = websocket.query_params.get("token")
+        if not token:
+            await websocket.close(code=4001, reason="Authentication required")
+            return
+        try:
+            from .utils.auth import decode_token
+            payload = decode_token(token)
+            if payload.get("type") != "access":
+                await websocket.close(code=4001, reason="Invalid token type")
+                return
+        except Exception:
+            await websocket.close(code=4001, reason="Invalid or expired token")
+            return
+
     await manager.connect(websocket, scan_id)
     
     try:

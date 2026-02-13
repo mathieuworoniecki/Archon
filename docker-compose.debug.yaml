@@ -1,0 +1,23 @@
+# Docker Compose Debug Override
+# Usage: docker compose -f docker-compose.yaml -f docker-compose.debug.yaml up -d
+#
+# Exposes internal service ports for local debugging ONLY.
+# NEVER use this file in production.
+
+services:
+  postgres:
+    ports:
+      - "5433:5432"
+
+  meilisearch:
+    ports:
+      - "7701:7700"
+
+  qdrant:
+    ports:
+      - "6335:6333"
+      - "6336:6334"
+
+  redis:
+    ports:
+      - "6380:6379"

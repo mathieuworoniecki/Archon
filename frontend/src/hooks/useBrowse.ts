@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
 import { getDocuments, Document, BrowseFilters, FileType, SortBy } from '@/lib/api'
+import { useProject } from '@/contexts/ProjectContext'
 
 export interface UseBrowseState {
     documents: Document[]
@@ -10,6 +11,7 @@ export interface UseBrowseState {
 }
 
 export function useBrowse(initialFilters?: BrowseFilters) {
+    const { selectedProject } = useProject()
     const [documents, setDocuments] = useState<Document[]>([])
     const [total, setTotal] = useState(0)
     const [isLoading, setIsLoading] = useState(false)
@@ -18,6 +20,7 @@ export function useBrowse(initialFilters?: BrowseFilters) {
         skip: 0,
         limit: 50,
         sort_by: 'indexed_desc',
+        project_path: selectedProject?.path,
         ...initialFilters
     })
 
@@ -37,10 +40,23 @@ export function useBrowse(initialFilters?: BrowseFilters) {
         }
     }, [filters])
 
-    // Fetch on mount and when filters change
+    // Keep browse scoped to the active project.
+    useEffect(() => {
+        const projectPath = selectedProject?.path
+        setFilters((prev) => {
+            if (prev.project_path === projectPath) return prev
+            return {
+                ...prev,
+                project_path: projectPath,
+                skip: 0,
+            }
+        })
+    }, [selectedProject?.path])
+
+    // Fetch on mount and when filters change.
     useEffect(() => {
         fetchDocuments()
-    }, [filters])
+    }, [fetchDocuments])
 
     const updateFilters = useCallback((newFilters: Partial<BrowseFilters>) => {
         setFilters(prev => ({
@@ -107,9 +123,10 @@ export function useBrowse(initialFilters?: BrowseFilters) {
         setFilters({
             skip: 0,
             limit: 50,
-            sort_by: 'indexed_desc'
+            sort_by: 'indexed_desc',
+            project_path: selectedProject?.path,
         })
-    }, [])
+    }, [selectedProject?.path])
 
     return {
         documents,

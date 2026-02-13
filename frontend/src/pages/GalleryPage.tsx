@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Image as ImageIcon, Search, Loader2 } from 'lucide-react'
+import { Image as ImageIcon, Search, Loader2, RefreshCw, AlertTriangle } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { GalleryView } from '@/components/gallery/GalleryView'
@@ -16,6 +16,7 @@ export function GalleryPage() {
     const [hasMore, setHasMore] = useState(true)
     const [searchQuery, setSearchQuery] = useState('')
     const [searchInput, setSearchInput] = useState('')
+    const [error, setError] = useState<string | null>(null)
     const { t } = useTranslation()
     const sentinelRef = useRef<HTMLDivElement>(null)
 
@@ -32,9 +33,10 @@ export function GalleryPage() {
                 const newDocs = data.documents || []
                 setDocuments(prev => append ? [...prev, ...newDocs] : newDocs)
                 setHasMore(newDocs.length >= PAGE_SIZE)
+                setError(null)
             }
-        } catch (err) {
-            console.error('Failed to fetch media:', err)
+        } catch {
+            if (!append) setError(t('gallery.error'))
         } finally {
             setIsLoading(false)
             setIsLoadingMore(false)
@@ -101,8 +103,8 @@ export function GalleryPage() {
                 setDocuments(searchDocs)
                 setSearchQuery(searchInput)
             }
-        } catch (err) {
-            console.error('Search failed:', err)
+        } catch {
+            setError(t('gallery.error'))
         } finally {
             setIsLoading(false)
         }
@@ -152,6 +154,20 @@ export function GalleryPage() {
                     </p>
                 )}
             </div>
+
+            {/* Error banner */}
+            {error && (
+                <div className="mx-4 mt-3 p-3 rounded-lg bg-red-500/10 border border-red-500/20 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-red-500">
+                        <AlertTriangle className="h-4 w-4 shrink-0" />
+                        <span className="text-sm">{error}</span>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => { setError(null); fetchMedia() }} className="gap-1.5 shrink-0">
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        {t('common.retry')}
+                    </Button>
+                </div>
+            )}
 
             {/* Gallery Content */}
             {isLoading ? (

@@ -10,7 +10,7 @@ services:
     depends_on:
       - backend
     networks:
-      - finders_network
+      - frontend_net
     restart: unless-stopped
 
   # =============================================================================
@@ -24,11 +24,14 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - MEILISEARCH_URL=http://meilisearch:7700
+      - MEILISEARCH_API_KEY=${MEILISEARCH_API_KEY:-devkey123}
       - QDRANT_URL=http://qdrant:6333
       - DATABASE_URL=postgresql://archon:archon@postgres:5432/archon
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - TESSERACT_CMD=/usr/bin/tesseract
       - DISABLE_AUTH=${DISABLE_AUTH:-false}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:3100,http://127.0.0.1:5173}
     volumes:
       - ${DOCUMENTS_PATH:-./documents}:/documents:ro
     depends_on:
@@ -41,7 +44,8 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - finders_network
+      - frontend_net
+      - backend_net
     restart: unless-stopped
 
   # =============================================================================
@@ -54,6 +58,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - MEILISEARCH_URL=http://meilisearch:7700
+      - MEILISEARCH_API_KEY=${MEILISEARCH_API_KEY:-devkey123}
       - QDRANT_URL=http://qdrant:6333
       - DATABASE_URL=postgresql://archon:archon@postgres:5432/archon
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
@@ -70,7 +75,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - finders_network
+      - backend_net
     restart: unless-stopped
 
   # =============================================================================
@@ -79,8 +84,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: finders-postgres
-    ports:
-      - "5433:5432"
+    # No external port — internal network only
     environment:
       - POSTGRES_USER=archon
       - POSTGRES_PASSWORD=archon
@@ -93,7 +97,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - finders_network
+      - backend_net
     restart: unless-stopped
 
   # =============================================================================
@@ -102,12 +106,12 @@ services:
   meilisearch:
     image: getmeili/meilisearch:v1.6
     container_name: finders-meilisearch
-    ports:
-      - "7701:7700"
+    # No external port — internal network only
     volumes:
       - meilisearch_data:/meili_data
     environment:
       - MEILI_ENV=development
+      - MEILI_MASTER_KEY=${MEILISEARCH_API_KEY:-devkey123}
       - MEILI_NO_ANALYTICS=true
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
@@ -115,7 +119,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - finders_network
+      - backend_net
     restart: unless-stopped
 
   # =============================================================================
@@ -124,9 +128,7 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.7.4
     container_name: finders-qdrant
-    ports:
-      - "6335:6333"
-      - "6336:6334"
+    # No external port — internal network only
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
@@ -138,7 +140,7 @@ services:
       retries: 5
       start_period: 20s
     networks:
-      - finders_network
+      - backend_net
     restart: unless-stopped
 
   # =============================================================================
@@ -147,8 +149,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: finders-redis
-    ports:
-      - "6380:6379"
+    # No external port — internal network only
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
@@ -158,7 +159,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - finders_network
+      - backend_net
     restart: unless-stopped
 
 volumes:
@@ -172,5 +173,7 @@ volumes:
     name: finders_redis_data
 
 networks:
-  finders_network:
-    name: finders_network
+  frontend_net:
+    name: finders_frontend_net
+  backend_net:
+    name: finders_backend_net

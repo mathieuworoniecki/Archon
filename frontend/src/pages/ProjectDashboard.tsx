@@ -3,21 +3,19 @@
  * Shows all projects as cards with scan stats. Clicking a project enters the app.
  * Scan launch + active scan progress stay visible here.
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
     Shield, FolderOpen, Scan, FolderSearch, FileText, Database,
     CheckCircle2, XCircle, Clock, Loader2, Square,
     Trash2, Eye, HardDrive, ArrowRight,
     Zap, RefreshCw, Play, MoreVertical, Pencil, AlertTriangle, ChevronDown, SkipForward,
-    RotateCcw, Image, FileCode, Video
+    RotateCcw, Image
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel,
     AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -32,9 +30,14 @@ import { useProject, type Project as ProjectType } from '@/contexts/ProjectConte
 import { useScanProgress } from '@/hooks/useScanProgress'
 import { createScan, estimateScan, factoryReset, type ScanRecord, type ScanEstimate } from '@/lib/api'
 import { ScanDetailModal } from '@/components/scan/ScanDetailModal'
+import { ScanConfigPanel } from '@/components/scan/ScanConfigPanel'
 import { useTranslation } from '@/contexts/I18nContext'
 import { useTheme } from '@/hooks/useTheme'
 import { toast } from 'sonner'
+import { authFetch } from '@/lib/auth'
+import { formatDuration, formatNumber } from '@/lib/formatters'
+
+const DELETE_DELAY_MS = 5000
 
 export function ProjectDashboard() {
     const { projects, isLoading: isLoadingProjects, documentsPath, selectProject, refetchProjects } = useProject()
@@ -56,8 +59,13 @@ export function ProjectDashboard() {
     // Scan config dialog
     const [projectToScan, setProjectToScan] = useState<ProjectType | null>(null)
     const [resumeScanId, setResumeScanId] = useState<number | null>(null)
-    const [enableEmbeddings, setEnableEmbeddings] = useState(false)
-    const [embeddingTier, setEmbeddingTier] = useState<'free' | 'paid'>('free')
+    const [enableEmbeddings, setEnableEmbeddings] = useState<boolean>(() => {
+        try {
+            return localStorage.getItem('archon_scan_enable_embeddings') === 'true'
+        } catch {
+            return false
+        }
+    })
 
     // Rename project (scan label)
     const [renamingProject, setRenamingProject] = useState<string | null>(null)
@@ -77,6 +85,7 @@ export function ProjectDashboard() {
     const [showFactoryReset, setShowFactoryReset] = useState(false)
     const [resetConfirmText, setResetConfirmText] = useState('')
     const [isResetting, setIsResetting] = useState(false)
+    const pendingDeletionTimersRef = useRef<Map<string, number>>(new Map())
 
     const { progress, isComplete, isReconnecting } = useScanProgress(activeScanId)
 
@@ -89,9 +98,24 @@ export function ProjectDashboard() {
 
     useEffect(() => { fetchScans() }, [])
 
+    useEffect(() => {
+        try {
+            localStorage.setItem('archon_scan_enable_embeddings', String(enableEmbeddings))
+        } catch {
+            // Ignore storage errors.
+        }
+    }, [enableEmbeddings])
+
+    useEffect(() => {
+        return () => {
+            pendingDeletionTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+            pendingDeletionTimersRef.current.clear()
+        }
+    }, [])
+
     const fetchScans = async () => {
         try {
-            const response = await fetch('/api/scan/')
+            const response = await authFetch('/api/scan/')
             if (response.ok) {
                 const data = await response.json()
                 const scanList = Array.isArray(data) ? data : []
@@ -99,8 +123,8 @@ export function ProjectDashboard() {
                 const running = scanList.find((s: ScanRecord) => s.status === 'running')
                 if (running) setActiveScanId(running.id)
             }
-        } catch (err) {
-            console.error('Failed to fetch scans:', err)
+        } catch {
+            // silently fail — UI shows stale scan data
         } finally {
             setIsLoadingScans(false)
         }
@@ -114,10 +138,7 @@ export function ProjectDashboard() {
         if (resumeId) {
             const scan = scans.find(s => s.id === resumeId)
             setEnableEmbeddings(scan?.enable_embeddings ?? false)
-        } else {
-            setEnableEmbeddings(false)
         }
-        setEmbeddingTier('free')
         // Fetch scan estimate
         setIsEstimating(true)
         try {
@@ -135,52 +156,91 @@ export function ProjectDashboard() {
         setIsStarting(true)
         const project = projectToScan
         const scanIdToResume = resumeScanId
-        setProjectToScan(null)
-        setResumeScanId(null)
         try {
             if (scanIdToResume) {
-                const response = await fetch(`/api/scan/${scanIdToResume}/resume`, { method: 'POST' })
+                const response = await authFetch(`/api/scan/${scanIdToResume}/resume`, { method: 'POST' })
                 if (response.ok) {
                     const data = await response.json()
                     setActiveScanId(data.id || scanIdToResume)
                     fetchScans()
-                    toast.success('Scan repris avec succès')
+                    toast.success(t('dashboard.toast.resumed'))
+                    setProjectToScan(null)
+                    setResumeScanId(null)
                 }
             } else {
+                selectProject(project)
                 const scan = await createScan(project.path, enableEmbeddings)
                 setActiveScanId(scan.id)
                 fetchScans()
-                toast.success(`Scan lancé — ${project.name}`)
+                toast.success(t('dashboard.toast.started').replace('{name}', project.name))
+                setProjectToScan(null)
+                setResumeScanId(null)
             }
-        } catch (err) {
-            console.error('Failed to start scan:', err)
-            toast.error('Échec du lancement du scan')
+        } catch {
+            toast.error(t('dashboard.toast.startFailed'))
         } finally {
             setIsStarting(false)
         }
     }
 
-    const handleDeleteScan = async (scanId: number) => {
-        try {
-            await fetch(`/api/scan/${scanId}`, { method: 'DELETE' })
-            fetchScans()
-            toast.success('Scan supprimé')
-        } catch {
-            toast.error('Échec de la suppression')
-        } finally {
-            setScanToDelete(null)
+    const clearPendingDeletion = (key: string): boolean => {
+        const timerId = pendingDeletionTimersRef.current.get(key)
+        if (timerId === undefined) return false
+        window.clearTimeout(timerId)
+        pendingDeletionTimersRef.current.delete(key)
+        return true
+    }
+
+    const undoPendingDeletion = (key: string, successMessage: string) => {
+        if (clearPendingDeletion(key)) {
+            toast.success(successMessage)
         }
+    }
+
+    const executeDeleteScan = async (scanId: number) => {
+        try {
+            await authFetch(`/api/scan/${scanId}`, { method: 'DELETE' })
+            await fetchScans()
+            toast.success(t('dashboard.toast.deleted'))
+        } catch {
+            toast.error(t('dashboard.toast.deleteFailed'))
+        }
+    }
+
+    const handleDeleteScan = (scanId: number) => {
+        const key = `scan:${scanId}`
+        if (pendingDeletionTimersRef.current.has(key)) {
+            setScanToDelete(null)
+            toast.message(`La suppression du scan #${scanId} est déjà planifiée.`)
+            return
+        }
+
+        const timerId = window.setTimeout(() => {
+            pendingDeletionTimersRef.current.delete(key)
+            void executeDeleteScan(scanId)
+        }, DELETE_DELAY_MS)
+
+        pendingDeletionTimersRef.current.set(key, timerId)
+        setScanToDelete(null)
+
+        toast.message(`Suppression du scan #${scanId} dans 5 secondes.`, {
+            description: 'Cliquez sur Undo pour annuler.',
+            action: {
+                label: 'Undo',
+                onClick: () => undoPendingDeletion(key, `Suppression du scan #${scanId} annulée.`),
+            },
+            duration: DELETE_DELAY_MS + 1000,
+        })
     }
 
     const handleCancelScan = async (scanId: number) => {
         try {
-            await fetch(`/api/scan/${scanId}/cancel`, { method: 'POST' })
+            await authFetch(`/api/scan/${scanId}/cancel`, { method: 'POST' })
             fetchScans()
             if (scanId === activeScanId) setActiveScanId(null)
-            toast.success('Scan annulé')
-        } catch (err) {
-            console.error('Failed to cancel:', err)
-            toast.error('Échec de l\'annulation')
+            toast.success(t('dashboard.toast.cancelled'))
+        } catch {
+            toast.error(t('dashboard.toast.cancelFailed'))
         }
     }
 
@@ -190,21 +250,6 @@ export function ProjectDashboard() {
         const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
         const i = Math.floor(Math.log(bytes) / Math.log(k))
         return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
-    }
-
-    const formatNumber = (n: number) => n.toLocaleString()
-
-    const formatDuration = (start: string, end?: string, seconds?: number) => {
-        let s: number
-        if (seconds !== undefined) {
-            s = seconds
-        } else {
-            const ms = (end ? new Date(end) : new Date()).getTime() - new Date(start).getTime()
-            s = Math.floor(ms / 1000)
-        }
-        if (s < 60) return `${s}s`
-        if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
-        return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
     }
 
     // Get scan history for a specific project
@@ -225,34 +270,58 @@ export function ProjectDashboard() {
 
 
     // Delete all scans for a project
-    const handleDeleteProject = async (project: ProjectType) => {
-        const pScans = getProjectScans(project)
+    const executeDeleteProject = async (project: ProjectType, scanIds: number[]) => {
         try {
-            for (const scan of pScans) {
-                await fetch(`/api/scan/${scan.id}`, { method: 'DELETE' })
+            for (const scanId of scanIds) {
+                await authFetch(`/api/scan/${scanId}`, { method: 'DELETE' })
             }
-            fetchScans()
-            refetchProjects()
-            toast.success(`Projet ${project.name} supprimé (${pScans.length} scans)`)
+            await fetchScans()
+            await refetchProjects()
+            toast.success(t('dashboard.toast.projectDeleted').replace('{name}', project.name).replace('{count}', String(scanIds.length)))
         } catch {
-            toast.error('Échec de la suppression du projet')
-        } finally {
-            setProjectToDelete(null)
+            toast.error(t('dashboard.toast.projectDeleteFailed'))
         }
+    }
+
+    const handleDeleteProject = (project: ProjectType) => {
+        const key = `project:${project.path}`
+        if (pendingDeletionTimersRef.current.has(key)) {
+            setProjectToDelete(null)
+            toast.message(`La suppression du projet ${project.name} est déjà planifiée.`)
+            return
+        }
+
+        const scanIds = getProjectScans(project).map((scan) => scan.id)
+        const timerId = window.setTimeout(() => {
+            pendingDeletionTimersRef.current.delete(key)
+            void executeDeleteProject(project, scanIds)
+        }, DELETE_DELAY_MS)
+
+        pendingDeletionTimersRef.current.set(key, timerId)
+        setProjectToDelete(null)
+
+        toast.message(`Suppression du projet ${project.name} dans 5 secondes.`, {
+            description: `${scanIds.length} scan(s) seront supprimés. Cliquez sur Undo pour annuler.`,
+            action: {
+                label: 'Undo',
+                onClick: () => undoPendingDeletion(key, `Suppression du projet ${project.name} annulée.`),
+            },
+            duration: DELETE_DELAY_MS + 1000,
+        })
     }
 
     // Rename a scan
     const handleRenameScan = async (scanId: number, label: string) => {
         try {
-            await fetch(`/api/scan/${scanId}/rename`, {
+            await authFetch(`/api/scan/${scanId}/rename`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ label })
             })
             fetchScans()
-            toast.success('Scan renommé')
+            toast.success(t('dashboard.toast.renamed'))
         } catch {
-            toast.error('Échec du renommage')
+            toast.error(t('dashboard.toast.renameFailed'))
         } finally {
             setRenamingProject(null)
         }
@@ -263,13 +332,13 @@ export function ProjectDashboard() {
         setIsResetting(true)
         try {
             const result = await factoryReset()
-            toast.success(`Reset terminé — ${result.deleted_scans} scans, ${result.deleted_documents} documents supprimés`)
+            toast.success(t('dashboard.toast.resetSuccess').replace('{scans}', String(result.deleted_scans)).replace('{docs}', String(result.deleted_documents)))
             // Clear all scan state
             setActiveScanId(null)
             // Force reload to ensure clean state everywhere
             setTimeout(() => window.location.reload(), 1000)
         } catch {
-            toast.error('Échec du factory reset')
+            toast.error(t('dashboard.toast.resetFailed'))
         } finally {
             setIsResetting(false)
             setShowFactoryReset(false)
@@ -292,7 +361,7 @@ export function ProjectDashboard() {
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
-                        <Button variant="ghost" size="sm" onClick={() => { fetchScans(); refetchProjects(); toast.success('Données rafraîchies') }}>
+                        <Button variant="ghost" size="sm" onClick={() => { fetchScans(); refetchProjects(); toast.success(t('dashboard.toast.refreshed')) }}>
                             <RefreshCw className="h-4 w-4" />
                         </Button>
                         <Button
@@ -300,7 +369,7 @@ export function ProjectDashboard() {
                             size="sm"
                             onClick={() => setShowFactoryReset(true)}
                             className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                            title="Factory Reset"
+                            title={t('dashboard.factoryReset.title')}
                         >
                             <RotateCcw className="h-4 w-4" />
                         </Button>
@@ -607,12 +676,12 @@ export function ProjectDashboard() {
                                             size="sm"
                                             onClick={() => {
                                                 const proj = projects.find(p => scans.find(s => s.id === activeScanId && s.path === p.path))
-                                                if (proj) { selectProject(proj); navigate('/cockpit') }
+                                                if (proj) { selectProject(proj); navigate('/analysis') }
                                             }}
                                             className="gap-1.5"
                                         >
                                             <Database className="h-3.5 w-3.5" />
-                                            Ouvrir le Cockpit
+                                            Ouvrir l'analyse
                                             <ArrowRight className="h-3.5 w-3.5" />
                                         </Button>
                                         <Button
@@ -756,13 +825,14 @@ export function ProjectDashboard() {
                                                     )
                                                 })()}
 
+                                                {hasCompletedScan ? (
                                                 <div className="flex gap-2">
                                                     <Button className="flex-1" onClick={() => { selectProject(project); navigate('/') }}>
                                                         {t('dashboard.openProject')}
                                                         <ArrowRight className="h-4 w-4 ml-2" />
                                                     </Button>
                                                     <Button variant="outline" size="icon" onClick={() => openScanDialog(project)}
-                                                            disabled={isStarting} title={hasCompletedScan ? t('dashboard.rescan') : t('dashboard.startScan')}>
+                                                            disabled={isStarting} title={t('dashboard.rescan')}>
                                                         {isStarting ? (
                                                             <Loader2 className="h-4 w-4 animate-spin" />
                                                         ) : (
@@ -803,6 +873,33 @@ export function ProjectDashboard() {
                                                         </DropdownMenuContent>
                                                     </DropdownMenu>
                                                 </div>
+                                                ) : (
+                                                <div className="flex gap-2">
+                                                    <Button className="flex-1" onClick={() => openScanDialog(project)}
+                                                            disabled={isStarting}>
+                                                        {isStarting ? (
+                                                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                                        ) : (
+                                                            <Scan className="h-4 w-4 mr-2" />
+                                                        )}
+                                                        {t('dashboard.startScan')}
+                                                    </Button>
+                                                    <DropdownMenu>
+                                                        <DropdownMenuTrigger asChild>
+                                                            <Button variant="ghost" size="icon">
+                                                                <MoreVertical className="h-4 w-4" />
+                                                            </Button>
+                                                        </DropdownMenuTrigger>
+                                                        <DropdownMenuContent align="end">
+                                                            <DropdownMenuItem className="text-red-500 focus:text-red-500"
+                                                                              onClick={() => setProjectToDelete(project)}>
+                                                                <Trash2 className="h-4 w-4 mr-2" />
+                                                                {t('dashboard.deleteProject')}
+                                                            </DropdownMenuItem>
+                                                        </DropdownMenuContent>
+                                                    </DropdownMenu>
+                                                </div>
+                                                )}
                                             </div>
                                         </CardContent>
                                     </Card>
@@ -970,7 +1067,15 @@ export function ProjectDashboard() {
             </AlertDialog>
 
             {/* Scan configuration dialog */}
-            <AlertDialog open={projectToScan !== null} onOpenChange={(open) => !open && setProjectToScan(null)}>
+            <AlertDialog
+                open={projectToScan !== null}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setProjectToScan(null)
+                        setResumeScanId(null)
+                    }
+                }}
+            >
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle className="flex items-center gap-2">
@@ -982,109 +1087,19 @@ export function ProjectDashboard() {
                         </AlertDialogDescription>
                     </AlertDialogHeader>
 
-                    <div className="space-y-4 py-2">
-                        {/* Scan Estimate Preview */}
-                        {!resumeScanId && (
-                            <div className="p-3 rounded-lg border bg-muted/30">
-                                {isEstimating ? (
-                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                        Analyse du dossier…
-                                    </div>
-                                ) : scanEstimate ? (
-                                    <div className="space-y-2">
-                                        <div className="flex items-center gap-2 text-sm font-medium">
-                                            <FolderSearch className="h-4 w-4 text-primary" />
-                                            {formatNumber(scanEstimate.file_count)} fichiers détectés
-                                            {scanEstimate.sampled && <Badge variant="outline" className="text-[10px] py-0">estimé</Badge>}
-                                        </div>
-                                        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                                            {scanEstimate.type_counts.pdf > 0 && (
-                                                <span className="flex items-center gap-1"><FileText className="h-3 w-3 text-red-400" />{formatNumber(scanEstimate.type_counts.pdf)} PDF</span>
-                                            )}
-                                            {scanEstimate.type_counts.image > 0 && (
-                                                <span className="flex items-center gap-1"><Image className="h-3 w-3 text-blue-400" />{formatNumber(scanEstimate.type_counts.image)} Images</span>
-                                            )}
-                                            {scanEstimate.type_counts.text > 0 && (
-                                                <span className="flex items-center gap-1"><FileCode className="h-3 w-3 text-green-400" />{formatNumber(scanEstimate.type_counts.text)} Textes</span>
-                                            )}
-                                            {scanEstimate.type_counts.video > 0 && (
-                                                <span className="flex items-center gap-1"><Video className="h-3 w-3 text-purple-400" />{formatNumber(scanEstimate.type_counts.video)} Vidéos</span>
-                                            )}
-                                        </div>
-                                        <div className="text-xs text-muted-foreground">
-                                            💾 {scanEstimate.size_mb.toFixed(1)} MB
-                                        </div>
-                                    </div>
-                                ) : null}
-                            </div>
-                        )}
-
-                        {/* AI Embeddings toggle */}
-                        <div className="flex items-center justify-between p-3 rounded-lg border">
-                            <div className="flex items-center gap-3">
-                                <Zap className={`h-5 w-5 ${enableEmbeddings ? 'text-purple-500' : 'text-muted-foreground'}`} />
-                                <div>
-                                    <Label className="font-medium">{t('scans.aiEmbeddings')}</Label>
-                                    <div className="text-xs text-muted-foreground">{t('scans.semanticSearch')}</div>
-                                </div>
-                            </div>
-                            <Switch checked={enableEmbeddings} onCheckedChange={setEnableEmbeddings} />
-                        </div>
-
-                        {/* Embedding cost preview */}
-                        {enableEmbeddings && scanEstimate && (
-                            <div className="p-3 rounded-lg border border-purple-500/20 bg-purple-500/5">
-                                <div className="text-xs text-purple-300">
-                                    🧠 Coût estimé : <strong>${scanEstimate.embedding_estimate.estimated_cost_usd.toFixed(3)}</strong>
-                                    {scanEstimate.embedding_estimate.free_tier_available && (
-                                        <Badge className="ml-2 bg-green-500/20 text-green-400 text-[10px] py-0">Free tier ✓</Badge>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Tier selection */}
-                        {enableEmbeddings && (
-                            <div className="flex items-center justify-between p-3 rounded-lg border">
-                                <div className="flex items-center gap-3">
-                                    <Database className={`h-5 w-5 ${embeddingTier === 'paid' ? 'text-amber-500' : 'text-muted-foreground'}`} />
-                                    <div>
-                                        <Label className="font-medium">{t('scans.tier')}</Label>
-                                        <div className="text-xs text-muted-foreground">
-                                            {embeddingTier === 'free' ? t('scans.freeTierDesc') : t('scans.paidTierDesc')}
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="flex rounded-md border overflow-hidden">
-                                    <button
-                                        className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                                            embeddingTier === 'free'
-                                                ? 'bg-primary text-primary-foreground'
-                                                : 'bg-transparent text-muted-foreground hover:text-foreground'
-                                        }`}
-                                        onClick={() => setEmbeddingTier('free')}
-                                    >
-                                        {t('scans.freeTier')}
-                                    </button>
-                                    <button
-                                        className={`px-3 py-1.5 text-xs font-medium transition-colors border-l ${
-                                            embeddingTier === 'paid'
-                                                ? 'bg-primary text-primary-foreground'
-                                                : 'bg-transparent text-muted-foreground hover:text-foreground'
-                                        }`}
-                                        onClick={() => setEmbeddingTier('paid')}
-                                    >
-                                        {t('scans.paidTier')}
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-                    </div>
+                    <ScanConfigPanel
+                        projectName={projectToScan?.name}
+                        projectPath={projectToScan?.path}
+                        estimate={scanEstimate}
+                        isEstimating={isEstimating}
+                        enableEmbeddings={enableEmbeddings}
+                        onEnableEmbeddingsChange={setEnableEmbeddings}
+                        className="py-2"
+                    />
 
                     <AlertDialogFooter>
                         <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleConfirmScan}>
+                        <AlertDialogAction onClick={handleConfirmScan} disabled={isStarting}>
                             {resumeScanId ? (
                                 <Play className="h-4 w-4 mr-2" />
                             ) : (
@@ -1105,15 +1120,15 @@ export function ProjectDashboard() {
                         </AlertDialogTitle>
                         <AlertDialogDescription>
                             <span className="block mb-3">
-                                Cette action est <strong className="text-red-400">irréversible</strong>. Toutes les données seront supprimées :
+                                {t('dashboard.factoryReset.warning')}
                             </span>
                             <ul className="text-xs space-y-1 text-muted-foreground mb-4">
-                                <li>• Tous les scans et leur historique</li>
-                                <li>• Tous les documents indexés</li>
-                                <li>• Tous les favoris et tags</li>
-                                <li>• Les index MeiliSearch et Qdrant</li>
+                                <li>• {t('dashboard.factoryReset.item1')}</li>
+                                <li>• {t('dashboard.factoryReset.item2')}</li>
+                                <li>• {t('dashboard.factoryReset.item3')}</li>
+                                <li>• {t('dashboard.factoryReset.item4')}</li>
                             </ul>
-                            <span className="block text-xs">Tapez <strong className="text-red-400 font-mono">RESET</strong> pour confirmer :</span>
+                            <span className="block text-xs">{t('dashboard.factoryReset.confirmPrompt')}</span>
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <Input
@@ -1130,9 +1145,9 @@ export function ProjectDashboard() {
                             className="bg-red-600 hover:bg-red-700 disabled:opacity-30"
                         >
                             {isResetting ? (
-                                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Réinitialisation…</>
+                                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {t('dashboard.factoryReset.resetting')}</>
                             ) : (
-                                <><RotateCcw className="h-4 w-4 mr-2" /> Réinitialiser</>
+                                <><RotateCcw className="h-4 w-4 mr-2" /> {t('dashboard.factoryReset.reset')}</>
                             )}
                         </AlertDialogAction>
                     </AlertDialogFooter>

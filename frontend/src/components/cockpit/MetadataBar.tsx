@@ -3,6 +3,7 @@ import { useCockpit } from '@/contexts/CockpitContext'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { useEntities } from '@/hooks/useEntities'
+import { useTranslation } from '@/contexts/I18nContext'
 
 interface MetadataBarProps {
     className?: string
@@ -17,6 +18,7 @@ const ENTITY_ICONS = {
 export function MetadataBar({ className }: MetadataBarProps) {
     const { selectedResult, selectedDocumentId } = useCockpit()
     const { entities } = useEntities()
+    const { t } = useTranslation()
 
     // Get entities for selected document
     const documentEntities = selectedDocumentId 
@@ -26,7 +28,7 @@ export function MetadataBar({ className }: MetadataBarProps) {
     if (!selectedResult) {
         return (
             <div className={cn("flex items-center justify-center text-muted-foreground text-sm", className)}>
-                Sélectionnez un document pour voir ses métadonnées
+                {t('metadata.selectDocument')}
             </div>
         )
     }
@@ -69,7 +71,7 @@ export function MetadataBar({ className }: MetadataBarProps) {
                             )
                         })
                     ) : (
-                        <span className="text-xs text-muted-foreground">Aucune entité</span>
+                        <span className="text-xs text-muted-foreground">{t('metadata.noEntities')}</span>
                     )}
                 </div>
             </div>
@@ -77,7 +79,7 @@ export function MetadataBar({ className }: MetadataBarProps) {
             {/* Score */}
             {selectedResult.score !== undefined && (
                 <div className="flex items-center gap-1.5 text-sm">
-                    <span className="text-muted-foreground">Score:</span>
+                    <span className="text-muted-foreground">{t('metadata.score')}:</span>
                     <span className="font-mono font-medium">
                         {(selectedResult.score * 100).toFixed(0)}%
                     </span>

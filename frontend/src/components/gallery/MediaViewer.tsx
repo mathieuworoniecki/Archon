@@ -1,8 +1,10 @@
 import { useState, useCallback, useEffect } from 'react'
-import { X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Search, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { getDocumentFileUrl, Document, API_BASE } from '@/lib/api'
+import { getDocumentFileUrl, getDocument, Document, API_BASE } from '@/lib/api'
+import { useTranslation } from '@/contexts/I18nContext'
 
 interface MediaViewerProps {
     documents: Document[]
@@ -15,6 +17,11 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
     const [currentIndex, setCurrentIndex] = useState(initialIndex)
     const [zoom, setZoom] = useState(1)
     const [isPlaying, setIsPlaying] = useState(false)
+    const [showOcr, setShowOcr] = useState(false)
+    const [ocrText, setOcrText] = useState<string | null>(null)
+    const [ocrLoading, setOcrLoading] = useState(false)
+    const { t } = useTranslation()
+    const navigate = useNavigate()
 
     const currentDoc = documents[currentIndex]
     const isVideo = currentDoc?.file_name?.match(/\.(mp4|webm|mov|avi)$/i)
@@ -23,6 +30,8 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
     useEffect(() => {
         setCurrentIndex(initialIndex)
         setZoom(1)
+        setShowOcr(false)
+        setOcrText(null)
     }, [initialIndex, isOpen])
 
     useEffect(() => {
@@ -43,12 +52,39 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
     const goToPrev = useCallback(() => {
         setCurrentIndex(i => (i > 0 ? i - 1 : documents.length - 1))
         setZoom(1)
+        setShowOcr(false)
+        setOcrText(null)
     }, [documents.length])
 
     const goToNext = useCallback(() => {
         setCurrentIndex(i => (i < documents.length - 1 ? i + 1 : 0))
         setZoom(1)
+        setShowOcr(false)
+        setOcrText(null)
     }, [documents.length])
+
+    const toggleOcr = useCallback(async () => {
+        if (showOcr) {
+            setShowOcr(false)
+            return
+        }
+        if (ocrText !== null) {
+            setShowOcr(true)
+            return
+        }
+        if (!currentDoc) return
+        setOcrLoading(true)
+        try {
+            const doc = await getDocument(currentDoc.id)
+            setOcrText(doc.text_content || '')
+            setShowOcr(true)
+        } catch {
+            setOcrText('')
+            setShowOcr(true)
+        } finally {
+            setOcrLoading(false)
+        }
+    }, [showOcr, ocrText, currentDoc])
 
     if (!isOpen || !currentDoc) return null
 
@@ -78,8 +114,31 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
                             </Button>
                         </>
                     )}
+                    {isImage && currentDoc.has_ocr && (
+                        <Button
+                            variant={showOcr ? 'default' : 'ghost'}
+                            size="sm"
+                            onClick={toggleOcr}
+                            disabled={ocrLoading}
+                            className="gap-1.5"
+                        >
+                            <FileText className="h-4 w-4" />
+                            {ocrLoading ? '…' : showOcr ? t('viewer.hideOcr') : t('viewer.showOcr')}
+                        </Button>
+                    )}
                     <Button variant="ghost" size="sm" onClick={onClose}>
                         <X className="h-5 w-5" />
+                    </Button>
+                </div>
+                <div>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-xs"
+                        onClick={() => { onClose(); navigate(`/?doc=${currentDoc.id}`) }}
+                    >
+                        <Search className="h-3.5 w-3.5" />
+                        {t('gallery.openInSearch')}
                     </Button>
                 </div>
             </div>
@@ -109,7 +168,8 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
                 )}
 
                 {/* Media Display */}
-                <div className="max-w-full max-h-full overflow-auto p-4">
+                <div className={cn("max-w-full max-h-full overflow-auto p-4 flex gap-4", showOcr && "items-start")}>
+                    <div className="flex-1 flex items-center justify-center">
                     {isVideo ? (
                         <video
                             src={mediaUrl}
@@ -129,10 +189,21 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
                         />
                     ) : (
                         <div className="text-white text-center">
-                            <p>Format non supporté</p>
+                            <p>{t('viewer.unsupportedFormat')}</p>
                             <a href={mediaUrl} target="_blank" className="text-primary underline">
-                                Télécharger
+                                {t('viewer.download')}
                             </a>
+                        </div>
+                    )}
+                    </div>
+
+                    {/* OCR Text Overlay */}
+                    {showOcr && ocrText !== null && (
+                        <div className="w-80 max-h-[80vh] overflow-auto rounded-lg bg-black/70 backdrop-blur-sm border border-white/10 p-4 shrink-0">
+                            <h4 className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">OCR</h4>
+                            <pre className="text-sm text-white/90 whitespace-pre-wrap font-mono leading-relaxed">
+                                {ocrText || 'No text detected'}
+                            </pre>
                         </div>
                     )}
                 </div>

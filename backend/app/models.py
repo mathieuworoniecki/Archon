@@ -38,7 +38,7 @@ class Scan(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     celery_task_id = Column(String(255), unique=True, index=True)
-    path = Column(String(1024), nullable=False)
+    path = Column(String(1024), nullable=False, index=True)
     label = Column(String(255), nullable=True)  # User-facing name, defaults to path basename
     status = Column(SQLEnum(ScanStatus), default=ScanStatus.PENDING)
     
@@ -72,8 +72,8 @@ class Document(Base):
     
     # File info
     file_path = Column(String(1024), nullable=False, index=True)
-    file_name = Column(String(255), nullable=False)
-    file_type = Column(SQLEnum(DocumentType), default=DocumentType.UNKNOWN)
+    file_name = Column(String(255), nullable=False, index=True)
+    file_type = Column(SQLEnum(DocumentType), default=DocumentType.UNKNOWN, index=True)
     file_size = Column(Integer, default=0)
     
     # Content
@@ -86,7 +86,7 @@ class Document(Base):
     qdrant_ids = Column(Text, nullable=True)  # JSON array of chunk IDs
     
     # Timestamps
-    file_modified_at = Column(DateTime, nullable=True)
+    file_modified_at = Column(DateTime, nullable=True, index=True)
     indexed_at = Column(DateTime, default=datetime.now(timezone.utc))
     
     # Archive info (if extracted from an archive)
@@ -95,6 +95,10 @@ class Document(Base):
     # Chain of Proof - cryptographic hashes
     hash_md5 = Column(String(32), nullable=True, index=True)
     hash_sha256 = Column(String(64), nullable=True, index=True)
+    
+    # Redaction detection
+    redaction_status = Column(String(20), nullable=True, index=True)  # none, suspected, confirmed
+    redaction_score = Column(Float, nullable=True)  # 0.0–1.0 confidence
     
     # Relationships
     scan = relationship("Scan", back_populates="documents")
@@ -168,6 +172,104 @@ class FavoriteTag(Base):
     
     favorite_id = Column(Integer, ForeignKey("favorites.id", ondelete="CASCADE"), primary_key=True)
     tag_id = Column(Integer, ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
+
+
+class WatchlistRule(Base):
+    """Saved monitoring query for recurring investigation checks."""
+    __tablename__ = "watchlist_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    query = Column(String(512), nullable=False)
+    project_path = Column(String(1024), nullable=True, index=True)
+    file_types = Column(Text, nullable=True)  # JSON array
+    enabled = Column(Integer, default=1, index=True)  # 1=enabled, 0=disabled
+    frequency_minutes = Column(Integer, default=60)
+
+    # Last execution snapshot
+    last_checked_at = Column(DateTime, nullable=True)
+    last_match_count = Column(Integer, default=0)
+    last_run_status = Column(String(32), nullable=True)  # ok|error
+    last_error = Column(Text, nullable=True)
+
+    created_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class WatchlistResult(Base):
+    """Execution result history for a watchlist rule."""
+    __tablename__ = "watchlist_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    rule_id = Column(Integer, ForeignKey("watchlist_rules.id", ondelete="CASCADE"), nullable=False, index=True)
+    checked_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    match_count = Column(Integer, default=0)
+    top_document_ids = Column(Text, nullable=True)  # JSON array
+    status = Column(String(32), nullable=False, default="ok")
+    error_message = Column(Text, nullable=True)
+
+
+class InvestigationTask(Base):
+    """Operational investigation task linked to documents/projects."""
+    __tablename__ = "investigation_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(String(32), default="todo", index=True)  # todo|in_progress|blocked|done
+    priority = Column(String(32), default="medium", index=True)  # low|medium|high|critical
+    due_date = Column(DateTime, nullable=True, index=True)
+
+    project_path = Column(String(1024), nullable=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True)
+    assignee_username = Column(String(100), nullable=True, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class DeepAnalysisStatus(str, Enum):
+    """Status for LangExtract deep analysis."""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class DeepAnalysis(Base):
+    """LangExtract deep analysis results for a document."""
+    __tablename__ = "deep_analyses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), unique=True, nullable=False)
+
+    # Structured results (JSON)
+    extractions = Column(Text, nullable=True)      # [{class, text, attributes, start, end}]
+    summary = Column(Text, nullable=True)           # LLM-generated document summary
+    relationships = Column(Text, nullable=True)     # [{source, target, type, evidence}]
+
+    # Metadata
+    model_used = Column(String(100), nullable=True)  # e.g. "gemini-2.5-flash"
+    status = Column(SQLEnum(DeepAnalysisStatus), default=DeepAnalysisStatus.PENDING)
+    error_message = Column(Text, nullable=True)
+    processing_time_ms = Column(Integer, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    completed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    document = relationship("Document", backref="deep_analysis")
 
 
 class AuditAction(str, Enum):

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { API_BASE } from '@/lib/api'
+import { authFetch } from '@/lib/auth'
 
 export interface Project {
     name: string
@@ -27,7 +28,7 @@ export function useProjects() {
         setError(null)
 
         try {
-            const response = await fetch(`${API_BASE}/projects/`)
+            const response = await authFetch(`${API_BASE}/projects/`)
             if (!response.ok) throw new Error('Failed to fetch projects')
             
             const result: ProjectsData = await response.json()

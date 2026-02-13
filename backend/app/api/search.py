@@ -11,12 +11,13 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 from ..database import get_db
-from ..models import Document, DocumentType, Entity
+from ..models import Document, DocumentType, Entity, User
 from ..schemas import SearchQuery, SearchResult, SearchResponse, SearchHighlight, SearchFacets
 from ..services.meilisearch import get_meilisearch_service
 from ..services.qdrant import get_qdrant_service
 from ..services.embeddings import get_embeddings_service
 from ..config import get_settings
+from ..utils.auth import get_current_user
 
 settings = get_settings()
 router = APIRouter(prefix="/search", tags=["search"])
@@ -25,7 +26,9 @@ router = APIRouter(prefix="/search", tags=["search"])
 def reciprocal_rank_fusion(
     meilisearch_results: List[Dict[str, Any]],
     qdrant_results: List[Dict[str, Any]],
-    k: int = 60
+    k: int = 60,
+    meilisearch_weight: float = 0.5,
+    qdrant_weight: float = 0.5,
 ) -> List[Dict[str, Any]]:
     """
     Combine results using Reciprocal Rank Fusion (RRF).
@@ -36,6 +39,8 @@ def reciprocal_rank_fusion(
         meilisearch_results: Results from Meilisearch (full-text)
         qdrant_results: Results from Qdrant (semantic)
         k: Constant to avoid high weights for top ranks (default 60)
+        meilisearch_weight: Weight of lexical ranking contribution [0, 1]
+        qdrant_weight: Weight of semantic ranking contribution [0, 1]
     
     Returns:
         Fused and sorted results
@@ -45,7 +50,7 @@ def reciprocal_rank_fusion(
     # Score Meilisearch results
     for rank, result in enumerate(meilisearch_results):
         doc_id = result["id"]
-        rrf_score = 1 / (k + rank + 1)
+        rrf_score = meilisearch_weight * (1 / (k + rank + 1))
         
         if doc_id not in scores:
             scores[doc_id] = {
@@ -81,7 +86,7 @@ def reciprocal_rank_fusion(
     # Score Qdrant results
     for rank, result in enumerate(qdrant_results):
         doc_id = result["document_id"]
-        rrf_score = 1 / (k + rank + 1)
+        rrf_score = qdrant_weight * (1 / (k + rank + 1))
         
         if doc_id not in scores:
             scores[doc_id] = {
@@ -112,10 +117,16 @@ def reciprocal_rank_fusion(
     return sorted_results
 
 
+def _rank_score(rank: int, k: int = 60) -> float:
+    """Rank-based normalized score aligned with RRF scale."""
+    return 1 / (k + rank + 1)
+
+
 @router.post("/", response_model=SearchResponse)
 async def hybrid_search(
     query: SearchQuery,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Perform hybrid search combining full-text and semantic search.
@@ -171,14 +182,17 @@ async def hybrid_search(
             # Log but continue with Meilisearch results
             logger.error("Qdrant error: %s", e)
     
-    # Fuse results using RRF
+    keyword_weight = max(0.0, min(1.0, 1.0 - float(query.semantic_weight)))
+    semantic_weight = max(0.0, min(1.0, float(query.semantic_weight)))
+
+    # Fuse results using weighted RRF
     if meilisearch_results and qdrant_results:
-        # Apply semantic weight to RRF k constant
-        # Higher semantic weight = lower k for Qdrant (higher boost)
         fused_results = reciprocal_rank_fusion(
             meilisearch_results,
             qdrant_results,
-            k=60
+            k=60,
+            meilisearch_weight=keyword_weight,
+            qdrant_weight=semantic_weight,
         )
     elif meilisearch_results:
         # Only Meilisearch results
@@ -188,7 +202,7 @@ async def hybrid_search(
                 "file_path": r["file_path"],
                 "file_name": r["file_name"],
                 "file_type": r["file_type"],
-                "score": 1 / (60 + i + 1),
+                "score": keyword_weight * _rank_score(i),
                 "from_meilisearch": True,
                 "from_qdrant": False,
                 "meilisearch_rank": i + 1,
@@ -206,7 +220,7 @@ async def hybrid_search(
                 "file_path": r["file_path"],
                 "file_name": r["file_name"],
                 "file_type": r["file_type"],
-                "score": r["score"],
+                "score": semantic_weight * _rank_score(i),
                 "from_meilisearch": False,
                 "from_qdrant": True,
                 "meilisearch_rank": None,
@@ -275,13 +289,14 @@ async def hybrid_search(
 async def get_search_facets(
     scan_id: Optional[int] = Query(None, description="Filter facets by scan"),
     project_path: Optional[str] = Query(None, description="Filter facets by project"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get available facet values for search filtering.
     Returns file type counts, size distribution, date range, and top entities.
     """
-    from sqlalchemy import func
+    from sqlalchemy import func, case
     
     base_q = db.query(Document)
     if scan_id:
@@ -300,21 +315,29 @@ async def get_search_facets(
         for ft, count in type_counts
     ]
     
-    # Size distribution
+    # Size distribution (single aggregate query instead of N counts)
     MB = 1024 * 1024
-    size_ranges_def = [
-        ("< 100 KB", 0, 100 * 1024),
-        ("100 KB – 1 MB", 100 * 1024, MB),
-        ("1 – 10 MB", MB, 10 * MB),
-        ("10 – 100 MB", 10 * MB, 100 * MB),
-        ("> 100 MB", 100 * MB, None),
-    ]
+    KB100 = 100 * 1024
+    MB10 = 10 * MB
+    MB100 = 100 * MB
+
+    size_bucket_counts = base_q.with_entities(
+        func.sum(case((Document.file_size < KB100, 1), else_=0)).label("lt_100kb"),
+        func.sum(case(((Document.file_size >= KB100) & (Document.file_size < MB), 1), else_=0)).label("kb100_to_mb1"),
+        func.sum(case(((Document.file_size >= MB) & (Document.file_size < MB10), 1), else_=0)).label("mb1_to_mb10"),
+        func.sum(case(((Document.file_size >= MB10) & (Document.file_size < MB100), 1), else_=0)).label("mb10_to_mb100"),
+        func.sum(case((Document.file_size >= MB100, 1), else_=0)).label("gte_100mb"),
+    ).one()
+
     size_ranges = []
-    for label, min_val, max_val in size_ranges_def:
-        sq = base_q.filter(Document.file_size >= min_val)
-        if max_val is not None:
-            sq = sq.filter(Document.file_size < max_val)
-        count = sq.count()
+
+    for label, min_val, max_val, count in [
+        ("< 100 KB", 0, KB100, int(size_bucket_counts.lt_100kb or 0)),
+        ("100 KB – 1 MB", KB100, MB, int(size_bucket_counts.kb100_to_mb1 or 0)),
+        ("1 – 10 MB", MB, MB10, int(size_bucket_counts.mb1_to_mb10 or 0)),
+        ("10 – 100 MB", MB10, MB100, int(size_bucket_counts.mb10_to_mb100 or 0)),
+        ("> 100 MB", MB100, None, int(size_bucket_counts.gte_100mb or 0)),
+    ]:
         if count > 0:
             size_ranges.append({
                 "label": label,
@@ -368,7 +391,8 @@ async def get_search_facets(
 async def quick_search(
     q: str = Query(..., min_length=1, description="Search query"),
     limit: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Quick hybrid search with default parameters.

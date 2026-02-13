@@ -6,11 +6,12 @@ from datetime import date
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, cast, Date
+from sqlalchemy import func, cast, Date, or_
 
 from ..database import get_db
-from ..models import Document
+from ..models import Document, User
 from pydantic import BaseModel
+from ..utils.auth import get_current_user
 
 
 router = APIRouter(prefix="/timeline", tags=["timeline"])
@@ -34,11 +35,13 @@ class TimelineResponse(BaseModel):
 
 @router.get("/aggregation", response_model=TimelineResponse)
 def get_timeline_aggregation(
-    granularity: str = Query("day", regex="^(day|week|month|year)$"),
+    granularity: str = Query("day", pattern="^(day|week|month|year)$"),
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     scan_id: Optional[int] = None,
-    db: Session = Depends(get_db)
+    project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get document counts aggregated by date.
@@ -68,6 +71,14 @@ def get_timeline_aggregation(
     base_filters = [Document.file_modified_at.isnot(None)]
     if scan_id:
         base_filters.append(Document.scan_id == scan_id)
+    if project_path:
+        normalized_project_path = project_path.rstrip("/\\")
+        base_filters.append(
+            or_(
+                Document.file_path == normalized_project_path,
+                Document.file_path.like(f"{normalized_project_path}/%"),
+            )
+        )
     if date_from:
         base_filters.append(cast(Document.file_modified_at, Date) >= date_from)
     if date_to:
@@ -130,7 +141,9 @@ def get_timeline_aggregation(
 @router.get("/range")
 def get_timeline_range(
     scan_id: Optional[int] = None,
-    db: Session = Depends(get_db)
+    project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get the date range of documents.
@@ -145,6 +158,14 @@ def get_timeline_range(
     
     if scan_id:
         query = query.filter(Document.scan_id == scan_id)
+    if project_path:
+        normalized_project_path = project_path.rstrip("/\\")
+        query = query.filter(
+            or_(
+                Document.file_path == normalized_project_path,
+                Document.file_path.like(f"{normalized_project_path}/%"),
+            )
+        )
     
     result = query.first()
     

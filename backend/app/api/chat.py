@@ -11,9 +11,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Document
+from ..models import Document, User
 from ..services.ai_chat import get_chat_service, clear_session
 from ..utils.rate_limiter import chat_limiter, document_ai_limiter
+from ..utils.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,8 @@ def _get_session_id(x_session_id: Optional[str] = Header(None)) -> str:
 async def chat(
     request: Request,
     body: ChatRequest,
-    session_id: str = Depends(_get_session_id)
+    session_id: str = Depends(_get_session_id),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Send a message to the AI assistant with optional RAG.
@@ -75,7 +77,8 @@ async def chat(
 async def chat_stream(
     request: Request,
     body: ChatRequest,
-    session_id: str = Depends(_get_session_id)
+    session_id: str = Depends(_get_session_id),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Stream chat response via SSE. Each event is a JSON object:
@@ -109,7 +112,8 @@ async def chat_stream(
 async def summarize_document(
     request: Request,
     body: SummarizeRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Generate a summary of a specific document. Rate limited.
@@ -139,7 +143,8 @@ async def summarize_document(
 async def ask_question_about_document(
     request: Request,
     body: QuestionRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Ask a specific question about a document. Rate limited.
@@ -168,7 +173,7 @@ async def ask_question_about_document(
 
 
 @router.get("/history")
-async def get_chat_history(session_id: str = Depends(_get_session_id)):
+async def get_chat_history(session_id: str = Depends(_get_session_id), current_user: User = Depends(get_current_user)):
     """
     Get the conversation history for this session.
     """
@@ -180,7 +185,7 @@ async def get_chat_history(session_id: str = Depends(_get_session_id)):
 
 
 @router.post("/clear")
-async def clear_chat_history(session_id: str = Depends(_get_session_id)):
+async def clear_chat_history(session_id: str = Depends(_get_session_id), current_user: User = Depends(get_current_user)):
     """
     Clear the conversation history for this session.
     """

@@ -105,12 +105,22 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/register", response_model=UserResponse, status_code=201)
-async def register(request: RegisterRequest, db: Session = Depends(get_db)):
+async def register(
+    request: RegisterRequest,
+    db: Session = Depends(get_db),
+):
     """
-    Register a new user.
-    First user is auto-promoted to admin.
-    Subsequent users require an existing admin.
+    Bootstrap registration — only works when no users exist.
+    After the first admin is created, use /admin-register instead.
     """
+    user_count = db.query(User).count()
+
+    if user_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration closed. Contact an admin to create your account.",
+        )
+
     # Check if username already exists
     existing = db.query(User).filter(User.username == request.username).first()
     if existing:
@@ -118,23 +128,65 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
             status_code=status.HTTP_409_CONFLICT,
             detail="Username already taken",
         )
-    
-    # First user becomes admin automatically
-    user_count = db.query(User).count()
-    role = UserRole.ADMIN if user_count == 0 else UserRole.ANALYST
-    
+
+    # First user is always admin
     user = User(
         username=request.username,
         email=request.email,
         hashed_password=hash_password(request.password),
-        role=role,
+        role=UserRole.ADMIN,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
-    
-    logger.info("New user '%s' registered (role=%s)", user.username, role.value)
-    
+
+    logger.info("Bootstrap admin '%s' registered", user.username)
+
+    return UserResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        role=user.role.value,
+        is_active=bool(user.is_active),
+        created_at=user.created_at.isoformat() if user.created_at else "",
+    )
+
+
+@router.post("/admin-register", response_model=UserResponse, status_code=201)
+async def admin_register(
+    request: RegisterRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Admin-only user creation.
+    Only authenticated admins can create new user accounts.
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can create new users",
+        )
+
+    existing = db.query(User).filter(User.username == request.username).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username already taken",
+        )
+
+    user = User(
+        username=request.username,
+        email=request.email,
+        hashed_password=hash_password(request.password),
+        role=UserRole.ANALYST,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    logger.info("Admin '%s' created user '%s' (role=analyst)", current_user.username, user.username)
+
     return UserResponse(
         id=user.id,
         username=user.username,

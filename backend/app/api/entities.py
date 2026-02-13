@@ -8,14 +8,16 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from ..database import get_db
-from ..models import Entity, Document
-from pydantic import BaseModel
+from ..models import Entity, Document, User
+from pydantic import BaseModel, ConfigDict
+from ..utils.auth import get_current_user
 
 
 router = APIRouter(prefix="/entities", tags=["entities"])
 
 
 class EntityResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     """Response for a single entity."""
     id: int
     text: str
@@ -24,8 +26,7 @@ class EntityResponse(BaseModel):
     document_id: int
     file_name: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+
 
 
 class EntityAggregation(BaseModel):
@@ -45,10 +46,11 @@ class EntityTypeSummary(BaseModel):
 
 @router.get("/", response_model=List[EntityAggregation])
 def list_entities(
-    entity_type: Optional[str] = Query(None, regex="^(PER|ORG|LOC|MISC|DATE)$"),
+    entity_type: Optional[str] = Query(None, pattern="^(PER|ORG|LOC|MISC|DATE)$"),
     search: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     List unique entities aggregated across all documents.
@@ -85,7 +87,7 @@ def list_entities(
 
 
 @router.get("/types", response_model=List[EntityTypeSummary])
-def get_entity_types(db: Session = Depends(get_db)):
+def get_entity_types(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Get summary of entities by type.
     
@@ -110,8 +112,9 @@ def get_entity_types(db: Session = Depends(get_db)):
 @router.get("/document/{document_id}", response_model=List[EntityResponse])
 def get_document_entities(
     document_id: int,
-    entity_type: Optional[str] = Query(None, regex="^(PER|ORG|LOC|MISC|DATE)$"),
-    db: Session = Depends(get_db)
+    entity_type: Optional[str] = Query(None, pattern="^(PER|ORG|LOC|MISC|DATE)$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get all entities extracted from a specific document.
@@ -129,9 +132,10 @@ def get_document_entities(
 @router.get("/search")
 def search_by_entity(
     text: str = Query(..., min_length=2),
-    entity_type: Optional[str] = Query(None, regex="^(PER|ORG|LOC|MISC|DATE)$"),
+    entity_type: Optional[str] = Query(None, pattern="^(PER|ORG|LOC|MISC|DATE)$"),
     limit: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Find documents containing a specific entity.
@@ -161,3 +165,185 @@ def search_by_entity(
         }
         for r in results
     ]
+
+
+# ── Graph / Co-occurrence ──────────────────────────────────
+
+
+class GraphNode(BaseModel):
+    """A node in the entity relationship graph."""
+    id: str
+    text: str
+    type: str
+    total_count: int
+    document_count: int
+
+
+class GraphEdge(BaseModel):
+    """An edge between two co-occurring entities."""
+    source: str
+    target: str
+    weight: int  # Number of shared documents
+
+
+class GraphResponse(BaseModel):
+    """Full graph response for D3 force simulation."""
+    nodes: List[GraphNode]
+    edges: List[GraphEdge]
+
+
+@router.get("/graph", response_model=GraphResponse)
+def get_entity_graph(
+    entity_type: Optional[str] = Query(None, pattern="^(PER|ORG|LOC|MISC|DATE)$"),
+    min_count: int = Query(2, ge=1, description="Minimum mentions to include entity"),
+    limit: int = Query(60, ge=10, le=200, description="Max number of nodes"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Build an entity co-occurrence graph.
+    
+    Nodes are unique entities; edges connect entities that appear
+    in the same document, weighted by the number of shared documents.
+    """
+    from collections import defaultdict
+    from itertools import combinations
+
+    # Step 1: Get top entities by total mentions
+    entity_query = db.query(
+        Entity.text,
+        Entity.type,
+        func.sum(Entity.count).label("total_count"),
+        func.count(Entity.document_id.distinct()).label("document_count")
+    ).group_by(Entity.text, Entity.type)
+
+    if entity_type:
+        entity_query = entity_query.filter(Entity.type == entity_type)
+
+    entity_query = entity_query.having(func.sum(Entity.count) >= min_count)
+    entity_query = entity_query.order_by(func.sum(Entity.count).desc())
+    entity_query = entity_query.limit(limit)
+
+    top_entities = entity_query.all()
+    
+    if not top_entities:
+        return GraphResponse(nodes=[], edges=[])
+
+    # Build node lookup
+    entity_keys = set()
+    nodes = []
+    for e in top_entities:
+        key = f"{e.type}:{e.text}"
+        entity_keys.add(key)
+        nodes.append(GraphNode(
+            id=key,
+            text=e.text,
+            type=e.type,
+            total_count=e.total_count,
+            document_count=e.document_count
+        ))
+
+    # Step 2: Find co-occurrences via shared documents
+    # Get all (document_id, entity_key) pairs for our top entities
+    entity_texts = [e.text for e in top_entities]
+    
+    doc_entities_query = db.query(
+        Entity.document_id,
+        Entity.text,
+        Entity.type
+    ).filter(Entity.text.in_(entity_texts))
+
+    if entity_type:
+        doc_entities_query = doc_entities_query.filter(Entity.type == entity_type)
+
+    doc_entities = doc_entities_query.all()
+
+    # Group entities by document
+    doc_to_entities: dict[int, set[str]] = defaultdict(set)
+    for row in doc_entities:
+        key = f"{row.type}:{row.text}"
+        if key in entity_keys:
+            doc_to_entities[row.document_id].add(key)
+
+    # Count co-occurrences
+    edge_weights: dict[tuple[str, str], int] = defaultdict(int)
+    for doc_id, ents in doc_to_entities.items():
+        if len(ents) < 2:
+            continue
+        for a, b in combinations(sorted(ents), 2):
+            edge_weights[(a, b)] += 1
+
+    # Build edges (only keep meaningful co-occurrences)
+    edges = [
+        GraphEdge(source=a, target=b, weight=w)
+        for (a, b), w in sorted(edge_weights.items(), key=lambda x: -x[1])
+        if w >= 1
+    ]
+
+    return GraphResponse(nodes=nodes, edges=edges)
+
+
+# ── Entity Merge ───────────────────────────────────────────
+
+
+class MergeRequest(BaseModel):
+    """Request to merge multiple entity names into a single canonical entity."""
+    entities: List[str]
+    canonical: str
+    entity_type: str
+
+
+@router.post("/merge")
+def merge_entities(
+    body: MergeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Merge duplicate entities into a canonical entity.
+
+    For each document, consolidate counts: if both "J. Dupont" and
+    "Jean Dupont" appear in the same document, keep one row with summed count.
+    """
+    if body.canonical not in body.entities:
+        body.entities.append(body.canonical)
+
+    # Entities to rename (exclude canonical itself)
+    aliases = [e for e in body.entities if e != body.canonical]
+    if not aliases:
+        return {"merged": 0}
+
+    merged_count = 0
+
+    for alias in aliases:
+        # Find all rows for this alias
+        alias_rows = (
+            db.query(Entity)
+            .filter(Entity.text == alias, Entity.type == body.entity_type)
+            .all()
+        )
+
+        for row in alias_rows:
+            # Check if canonical already exists in this document
+            existing = (
+                db.query(Entity)
+                .filter(
+                    Entity.text == body.canonical,
+                    Entity.type == body.entity_type,
+                    Entity.document_id == row.document_id,
+                )
+                .first()
+            )
+
+            if existing:
+                # Merge counts and delete duplicate
+                existing.count += row.count
+                db.delete(row)
+            else:
+                # Just rename
+                row.text = body.canonical
+
+            merged_count += 1
+
+    db.commit()
+    return {"merged": merged_count, "canonical": body.canonical}

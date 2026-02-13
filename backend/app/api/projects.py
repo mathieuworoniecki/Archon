@@ -6,13 +6,15 @@ import os
 import logging
 from pathlib import Path
 from typing import List, Optional
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 from ..config import get_settings
+from ..utils.auth import get_current_user
+from ..models import User
 
 settings = get_settings()
 
@@ -106,16 +108,49 @@ def get_directory_stats(path: Path, max_files: int = 1000, max_seconds: float = 
     return file_count, total_size, subdir_count, last_modified
 
 
+def _get_documents_dir() -> Path:
+    """Return resolved documents root directory."""
+    return Path(os.environ.get("DOCUMENTS_PATH", "/documents")).resolve()
+
+
+def _resolve_project_path(project_name: str) -> Path:
+    """
+    Resolve a project path safely under the documents root.
+
+    Prevents path traversal via project names like '..' or encoded separators.
+    """
+    if not project_name or project_name.strip() != project_name:
+        raise HTTPException(status_code=400, detail="Invalid project name")
+
+    # Project names are first-level folder names, never paths.
+    if any(sep in project_name for sep in ("/", "\\")) or project_name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid project name")
+
+    docs_dir = _get_documents_dir()
+    candidate = (docs_dir / project_name).resolve()
+
+    try:
+        candidate.relative_to(docs_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project name")
+
+    if not candidate.exists() or not candidate.is_dir():
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return candidate
+
+
 @router.get("/", response_model=ProjectsResponse)
 async def list_projects(
-    refresh_stats: bool = Query(default=False, description="Force refresh of directory stats")
+    refresh_stats: bool = Query(default=False, description="Force refresh of directory stats"),
+    current_user: User = Depends(get_current_user)
 ):
     """
     List all projects (first-level directories in /documents).
     """
     # Documents path from environment or default
-    documents_path = os.environ.get("DOCUMENTS_PATH", "/documents")
-    docs_dir = Path(documents_path)
+    docs_dir = _get_documents_dir()
+    documents_path = str(docs_dir)
     
     if not docs_dir.exists():
         return ProjectsResponse(
@@ -152,15 +187,11 @@ async def list_projects(
 
 
 @router.get("/{project_name}")
-async def get_project(project_name: str):
+async def get_project(project_name: str, current_user: User = Depends(get_current_user)):
     """
     Get details for a specific project.
     """
-    documents_path = os.environ.get("DOCUMENTS_PATH", "/documents")
-    project_path = Path(documents_path) / project_name
-    
-    if not project_path.exists() or not project_path.is_dir():
-        return {"error": "Project not found"}
+    project_path = _resolve_project_path(project_name)
     
     file_count, total_size, subdir_count, last_modified = get_directory_stats(project_path)
     
@@ -193,16 +224,13 @@ async def get_project(project_name: str):
 async def list_project_files(
     project_name: str,
     limit: int = Query(default=100, le=1000),
-    extensions: Optional[str] = Query(default=None, description="Comma-separated extensions filter")
+    extensions: Optional[str] = Query(default=None, description="Comma-separated extensions filter"),
+    current_user: User = Depends(get_current_user)
 ):
     """
     List files in a project with optional extension filter.
     """
-    documents_path = os.environ.get("DOCUMENTS_PATH", "/documents")
-    project_path = Path(documents_path) / project_name
-    
-    if not project_path.exists():
-        return {"error": "Project not found"}
+    project_path = _resolve_project_path(project_name)
     
     # Parse extensions filter
     ext_filter = None
@@ -242,23 +270,27 @@ async def list_project_files(
 
 
 @router.get("/{project_name}/stats")
-async def get_project_stats(project_name: str):
+async def get_project_stats(project_name: str, current_user: User = Depends(get_current_user)):
     """
     Get indexing statistics for a specific project.
     Returns document counts, type breakdown, and scan info for this project only.
     """
-    from sqlalchemy import func
+    from sqlalchemy import func, or_
     from ..database import SessionLocal
-    from ..models import Document, Scan, ScanStatus, DocumentType
-    
-    documents_path = os.environ.get("DOCUMENTS_PATH", "/documents")
-    project_path = str(Path(documents_path) / project_name)
+    from ..models import Document, Scan, DocumentType
+
+    project_path = _resolve_project_path(project_name)
+    project_path_str = str(project_path)
+    project_prefix = f"{project_path_str}{os.sep}"
     
     db = SessionLocal()
     try:
         # Documents indexed for this project (file_path starts with project path)
         total_docs = db.query(func.count(Document.id)).filter(
-            Document.file_path.like(f"{project_path}%")
+            or_(
+                Document.file_path == project_path_str,
+                Document.file_path.like(f"{project_prefix}%"),
+            )
         ).scalar() or 0
         
         # By type
@@ -266,7 +298,10 @@ async def get_project_stats(project_name: str):
             Document.file_type,
             func.count(Document.id)
         ).filter(
-            Document.file_path.like(f"{project_path}%")
+            or_(
+                Document.file_path == project_path_str,
+                Document.file_path.like(f"{project_prefix}%"),
+            )
         ).group_by(Document.file_type).all()
         
         by_type = {"pdf": 0, "image": 0, "text": 0, "video": 0, "unknown": 0}
@@ -284,12 +319,18 @@ async def get_project_stats(project_name: str):
         
         # Total size indexed
         total_size = db.query(func.sum(Document.file_size)).filter(
-            Document.file_path.like(f"{project_path}%")
+            or_(
+                Document.file_path == project_path_str,
+                Document.file_path.like(f"{project_prefix}%"),
+            )
         ).scalar() or 0
         
         # Scans for this project
         scans = db.query(Scan).filter(
-            Scan.path.like(f"{project_path}%")
+            or_(
+                Scan.path == project_path_str,
+                Scan.path.like(f"{project_prefix}%"),
+            )
         ).order_by(Scan.created_at.desc()).limit(5).all()
         
         scan_info = [{
@@ -311,4 +352,3 @@ async def get_project_stats(project_name: str):
         }
     finally:
         db.close()
-

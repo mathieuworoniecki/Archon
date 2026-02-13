@@ -2,12 +2,21 @@ import { FolderOpen, HardDrive, FileText, Clock, ChevronRight } from 'lucide-rea
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { Project } from '@/hooks/useProjects'
+import { useTranslation } from '@/contexts/I18nContext'
+
+export interface ProjectSelectorItem {
+    name: string
+    path: string
+    file_count: number
+    total_size_bytes: number
+    last_modified: string | null
+    subdirectories: number
+}
 
 interface ProjectSelectorProps {
-    projects: Project[]
-    selectedProject: Project | null
-    onSelect: (project: Project) => void
+    projects: ProjectSelectorItem[]
+    selectedProject: ProjectSelectorItem | null
+    onSelect: (project: ProjectSelectorItem) => void
     isLoading?: boolean
     documentsPath?: string
 }
@@ -20,9 +29,9 @@ function formatBytes(bytes: number): string {
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
 }
 
-function formatDate(dateStr: string | null): string {
+function formatDate(dateStr: string | null, locale: string): string {
     if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString('fr-FR', {
+    return new Date(dateStr).toLocaleDateString(locale === 'fr' ? 'fr-FR' : 'en-US', {
         day: 'numeric',
         month: 'short',
         year: 'numeric'
@@ -36,11 +45,13 @@ export function ProjectSelector({
     isLoading,
     documentsPath
 }: ProjectSelectorProps) {
+    const { t, locale } = useTranslation()
+
     if (isLoading) {
         return (
             <div className="flex items-center gap-2 text-muted-foreground py-8">
                 <FolderOpen className="h-5 w-5 animate-pulse" />
-                <span>Chargement des projets...</span>
+                <span>{t('projects.loading')}</span>
             </div>
         )
     }
@@ -49,9 +60,9 @@ export function ProjectSelector({
         return (
             <Card className="p-6 text-center">
                 <FolderOpen className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
-                <p className="font-medium">Aucun projet trouvé</p>
+                <p className="font-medium">{t('projects.noProjects')}</p>
                 <p className="text-sm text-muted-foreground mt-1">
-                    Créez des dossiers dans <code className="text-xs bg-muted px-1 rounded">{documentsPath}</code>
+                    {t('projects.createIn')} <code className="text-xs bg-muted px-1 rounded">{documentsPath}</code>
                 </p>
             </Card>
         )
@@ -61,8 +72,8 @@ export function ProjectSelector({
         <div className="space-y-4">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <HardDrive className="h-4 w-4" />
-                <span>Sélectionnez un projet à analyser</span>
-                <Badge variant="secondary">{projects.length} projet{projects.length > 1 ? 's' : ''}</Badge>
+                <span>{t('projects.selectProject')}</span>
+                <Badge variant="secondary">{projects.length} {projects.length > 1 ? t('projects.projectCountPlural') : t('projects.projectCount')}</Badge>
             </div>
 
             <div className="grid gap-3">
@@ -93,13 +104,13 @@ export function ProjectSelector({
                                     <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
                                         <span className="flex items-center gap-1">
                                             <FileText className="h-3.5 w-3.5" />
-                                            {project.file_count} fichiers
+                                            {project.file_count} {t('projects.files')}
                                         </span>
                                         <span>{formatBytes(project.total_size_bytes)}</span>
                                         {project.last_modified && (
                                             <span className="flex items-center gap-1">
                                                 <Clock className="h-3.5 w-3.5" />
-                                                {formatDate(project.last_modified)}
+                                                {formatDate(project.last_modified, locale)}
                                             </span>
                                         )}
                                     </div>

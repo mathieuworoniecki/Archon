@@ -3,15 +3,16 @@ Audit Log API endpoints for chain of proof.
 """
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import hashlib
 import json
 
 from ..database import get_db
-from ..models import AuditLog, AuditAction, Document
+from ..models import AuditLog, AuditAction, Document, User
+from ..utils.auth import require_role
 
 
 router = APIRouter(prefix="/audit", tags=["audit"])
@@ -28,8 +29,7 @@ class AuditLogResponse(BaseModel):
     previous_hash: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AuditLogCreate(BaseModel):
@@ -102,7 +102,8 @@ async def get_audit_logs(
     scan_id: Optional[int] = None,
     limit: int = Query(default=100, le=1000),
     offset: int = 0,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin"))
 ):
     """Get audit logs with optional filtering."""
     query = db.query(AuditLog)
@@ -138,7 +139,8 @@ async def get_audit_logs(
 @router.get("/document/{document_id}")
 async def get_document_audit_trail(
     document_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "analyst"))
 ):
     """Get complete audit trail for a specific document."""
     # Get document info
@@ -179,20 +181,25 @@ async def get_document_audit_trail(
 async def create_audit_log(
     log_data: AuditLogCreate,
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin"))
 ):
     """Create a manual audit log entry."""
     try:
         action = AuditAction(log_data.action)
     except ValueError:
-        return {"error": f"Invalid action: {log_data.action}"}
+        raise HTTPException(status_code=400, detail=f"Invalid action: {log_data.action}")
+
+    details = dict(log_data.details) if log_data.details else {}
+    details["created_by"] = current_user.username
+    details["created_by_role"] = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
     
     log = log_audit_action(
         db=db,
         action=action,
         document_id=log_data.document_id,
         scan_id=log_data.scan_id,
-        details=log_data.details,
+        details=details,
         user_ip=get_client_ip(request)
     )
     

@@ -2,15 +2,32 @@
 Archon Backend - Meilisearch Service
 Full-text search and highlighting
 """
+from dataclasses import dataclass
 import meilisearch
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal, Union
 from ..config import get_settings
 
 settings = get_settings()
 
 
+FilterField = Literal["file_type", "scan_id", "file_path"]
+FilterOperator = Literal["=", "STARTS WITH"]
+
+
+@dataclass(frozen=True)
+class _FilterClause:
+    field: FilterField
+    operator: FilterOperator
+    value: Union[str, int]
+
+
 class MeilisearchService:
     """Service for interacting with Meilisearch."""
+    _ALLOWED_FILTER_OPERATORS: Dict[str, set[str]] = {
+        "file_type": {"="},
+        "scan_id": {"="},
+        "file_path": {"STARTS WITH"},
+    }
     
     def __init__(self):
         self.client = meilisearch.Client(
@@ -72,6 +89,102 @@ class MeilisearchService:
         task = index.add_documents(documents)
         return {"task_uid": task.task_uid, "status": "enqueued", "count": len(documents)}
 
+    @staticmethod
+    def _escape_filter_string(value: str) -> str:
+        """Escape a string to keep Meilisearch filter syntax unambiguous."""
+        return (
+            value.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+        )
+
+    @classmethod
+    def _build_filter_clause(cls, clause: _FilterClause) -> str:
+        """Build and validate one filter clause against whitelisted fields/operators."""
+        allowed_operators = cls._ALLOWED_FILTER_OPERATORS.get(clause.field)
+        if not allowed_operators:
+            raise ValueError(f"Unsupported filter field: {clause.field}")
+        if clause.operator not in allowed_operators:
+            raise ValueError(
+                f"Unsupported operator '{clause.operator}' for field '{clause.field}'"
+            )
+
+        if clause.field == "scan_id":
+            if isinstance(clause.value, bool) or not isinstance(clause.value, int):
+                raise ValueError("scan_ids entries must be integers")
+            return f"{clause.field} {clause.operator} {clause.value}"
+
+        if not isinstance(clause.value, str):
+            raise ValueError(f"{clause.field} filter value must be a string")
+
+        normalized_value = clause.value.strip()
+        if not normalized_value:
+            raise ValueError(f"{clause.field} filter value cannot be empty")
+
+        escaped_value = cls._escape_filter_string(normalized_value)
+        return f'{clause.field} {clause.operator} "{escaped_value}"'
+
+    @classmethod
+    def _build_or_group(cls, clauses: List[_FilterClause]) -> str:
+        """Join multiple clauses with OR inside parentheses."""
+        if not clauses:
+            raise ValueError("Filter group cannot be empty")
+
+        built_clauses = [cls._build_filter_clause(clause) for clause in clauses]
+        if len(built_clauses) == 1:
+            return built_clauses[0]
+        return f"({' OR '.join(built_clauses)})"
+
+    @classmethod
+    def _build_filters(
+        cls,
+        file_types: Optional[List[str]],
+        scan_ids: Optional[List[int]],
+        project_path: Optional[str],
+    ) -> List[str]:
+        """Build all Meilisearch filters with strict validation."""
+        filters: List[str] = []
+
+        if file_types is not None:
+            if not isinstance(file_types, list):
+                raise ValueError("file_types must be a list of strings")
+            if file_types:
+                filters.append(
+                    cls._build_or_group(
+                        [
+                            _FilterClause(field="file_type", operator="=", value=file_type)
+                            for file_type in file_types
+                        ]
+                    )
+                )
+
+        if scan_ids is not None:
+            if not isinstance(scan_ids, list):
+                raise ValueError("scan_ids must be a list of integers")
+            if scan_ids:
+                filters.append(
+                    cls._build_or_group(
+                        [_FilterClause(field="scan_id", operator="=", value=scan_id) for scan_id in scan_ids]
+                    )
+                )
+
+        if project_path is not None:
+            if not isinstance(project_path, str):
+                raise ValueError("project_path must be a string")
+            filters.append(
+                cls._build_filter_clause(
+                    _FilterClause(
+                        field="file_path",
+                        operator="STARTS WITH",
+                        value=project_path,
+                    )
+                )
+            )
+
+        return filters
+
     
     def search(
         self,
@@ -90,17 +203,11 @@ class MeilisearchService:
         """
         index = self.client.index(self.index_name)
         
-        # Build filters
-        filters = []
-        if file_types:
-            type_filter = " OR ".join([f'file_type = "{t}"' for t in file_types])
-            filters.append(f"({type_filter})")
-        if scan_ids:
-            scan_filter = " OR ".join([f"scan_id = {s}" for s in scan_ids])
-            filters.append(f"({scan_filter})")
-        if project_path:
-            # Use starts-with filter for project path
-            filters.append(f'file_path STARTS WITH "{project_path}"')
+        filters = self._build_filters(
+            file_types=file_types,
+            scan_ids=scan_ids,
+            project_path=project_path,
+        )
         
         search_params = {
             "limit": limit,

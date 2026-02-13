@@ -58,9 +58,33 @@ export function ResultCard({ result, isSelected, onClick, className }: ResultCar
             <div className="space-y-2">
                 {/* Header */}
                 <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                        {getFileIcon(result.file_type)}
-                        <span className="font-medium truncate">{result.file_name}</span>
+                    <div className="flex items-center gap-2.5 min-w-0">
+                        {/* Inline thumbnail for visual types */}
+                        {(result.file_type === 'image' || result.file_type === 'pdf') ? (
+                            <div className="w-10 h-10 rounded-md overflow-hidden bg-muted/30 border border-border/50 shrink-0">
+                                <img
+                                    src={`/api/documents/${result.document_id}/thumbnail`}
+                                    alt=""
+                                    className="w-full h-full object-cover"
+                                    loading="lazy"
+                                    onError={(e) => {
+                                        const el = e.target as HTMLImageElement
+                                        el.style.display = 'none'
+                                        // Show fallback icon
+                                        const parent = el.parentElement
+                                        if (parent) {
+                                            parent.classList.add('flex', 'items-center', 'justify-center')
+                                            // Parent already has the icon from getFileIcon as the component re-renders
+                                        }
+                                    }}
+                                />
+                            </div>
+                        ) : (
+                            <div className="w-10 h-10 rounded-md bg-muted/20 border border-border/30 flex items-center justify-center shrink-0">
+                                {getFileIcon(result.file_type)}
+                            </div>
+                        )}
+                        <span className="font-medium truncate text-sm">{result.file_name}</span>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                         <FavoriteButton 
@@ -112,10 +136,25 @@ export function ResultCard({ result, isSelected, onClick, className }: ResultCar
                         </Badge>
                     )}
 
-                    {/* Score */}
-                    <span className="text-xs text-muted-foreground ml-auto">
-                        Score: {(result.score * 100).toFixed(1)}%
-                    </span>
+                    {/* Score — visual relevance bar */}
+                    <div className="flex items-center gap-1.5 ml-auto" title={`Score: ${(result.score * 100).toFixed(1)}%`}>
+                        <div className="w-16 h-1.5 rounded-full bg-muted/30 overflow-hidden">
+                            <div
+                                className="h-full rounded-full transition-all duration-300"
+                                style={{
+                                    width: `${Math.min(result.score * 100, 100)}%`,
+                                    backgroundColor: result.score >= 0.7
+                                        ? `hsl(${Math.round(120 * ((result.score - 0.7) / 0.3))}, 65%, 45%)`
+                                        : result.score >= 0.4
+                                            ? `hsl(${Math.round(40 * ((result.score - 0.4) / 0.3))}, 70%, 50%)`
+                                            : 'hsl(0, 65%, 50%)',
+                                }}
+                            />
+                        </div>
+                        <span className="text-[10px] text-muted-foreground tabular-nums w-8 text-right">
+                            {(result.score * 100).toFixed(0)}%
+                        </span>
+                    </div>
                 </div>
             </div>
 

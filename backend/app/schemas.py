@@ -3,8 +3,21 @@ Archon Backend - Pydantic Schemas
 """
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .models import ScanStatus, DocumentType
+
+
+def _strip_string(value):
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _strip_or_none(value):
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return value
 
 
 # =============================================================================
@@ -52,8 +65,7 @@ class ScanErrorOut(BaseModel):
     error_message: str
     created_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ScanOut(BaseModel):
@@ -73,8 +85,7 @@ class ScanOut(BaseModel):
     error_message: Optional[str]
     errors: List[ScanErrorOut] = []
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # =============================================================================
@@ -93,9 +104,10 @@ class DocumentOut(BaseModel):
     file_modified_at: Optional[datetime]
     indexed_at: datetime
     archive_path: Optional[str] = None  # Path inside archive if extracted
+    redaction_status: Optional[str] = None  # none, suspected, confirmed
+    redaction_score: Optional[float] = None  # 0.0–1.0
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DocumentListResponse(BaseModel):
@@ -110,6 +122,43 @@ class DocumentDetail(DocumentOut):
     """Schema for document detail with content."""
     text_content: Optional[str]
     scan_id: int
+
+
+class DocumentContentResponse(BaseModel):
+    """Schema for document text content response."""
+    document_id: int
+    file_name: str
+    text_content: Optional[str]
+    text_length: int
+
+
+class DocumentHighlightMatch(BaseModel):
+    """Schema for a query match inside a document."""
+    position: int
+    length: int
+    context: str
+    context_start: int
+
+
+class DocumentHighlightsResponse(BaseModel):
+    """Schema for document highlights response."""
+    document_id: int
+    query: str
+    total_matches: int
+    matches: List[DocumentHighlightMatch]
+
+
+class DocumentDeleteResponse(BaseModel):
+    """Schema for document deletion response."""
+    status: str
+    document_id: int
+
+
+class DocumentRedactionResponse(BaseModel):
+    """Schema for document redaction response."""
+    document_id: int
+    redaction_status: Optional[str]
+    redaction_score: Optional[float]
 
 
 # =============================================================================
@@ -236,8 +285,7 @@ class TagOut(TagBase):
     created_at: datetime
     favorite_count: int = 0
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TagUpdate(BaseModel):
@@ -273,8 +321,7 @@ class FavoriteOut(BaseModel):
     tags: List[TagOut] = []
     document: Optional[DocumentOut] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FavoriteListResponse(BaseModel):
@@ -282,3 +329,167 @@ class FavoriteListResponse(BaseModel):
     favorites: List[FavoriteOut]
     total: int
 
+
+# =============================================================================
+# WATCHLIST SCHEMAS
+# =============================================================================
+
+class WatchlistRuleBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    query: str = Field(..., min_length=1, max_length=512)
+    project_path: Optional[str] = Field(default=None, max_length=1024)
+    file_types: Optional[List[DocumentType]] = None
+    enabled: bool = True
+    frequency_minutes: int = Field(default=60, ge=1, le=10080)
+
+    @field_validator("name", "query", mode="before")
+    @classmethod
+    def _normalize_required_fields(cls, value):
+        return _strip_string(value)
+
+    @field_validator("project_path", mode="before")
+    @classmethod
+    def _normalize_project_path(cls, value):
+        return _strip_or_none(value)
+
+
+class WatchlistRuleCreate(WatchlistRuleBase):
+    pass
+
+
+class WatchlistRuleUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    query: Optional[str] = Field(default=None, min_length=1, max_length=512)
+    project_path: Optional[str] = Field(default=None, max_length=1024)
+    file_types: Optional[List[DocumentType]] = None
+    enabled: Optional[bool] = None
+    frequency_minutes: Optional[int] = Field(default=None, ge=1, le=10080)
+
+    @field_validator("name", "query", mode="before")
+    @classmethod
+    def _normalize_required_fields(cls, value):
+        return _strip_string(value)
+
+    @field_validator("project_path", mode="before")
+    @classmethod
+    def _normalize_project_path(cls, value):
+        return _strip_or_none(value)
+
+
+class WatchlistRuleOut(BaseModel):
+    id: int
+    name: str
+    query: str
+    project_path: Optional[str]
+    file_types: List[DocumentType] = []
+    enabled: bool
+    frequency_minutes: int
+    last_checked_at: Optional[datetime]
+    last_match_count: int
+    last_run_status: Optional[str]
+    last_error: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WatchlistRunResult(BaseModel):
+    rule_id: int
+    checked_at: datetime
+    match_count: int
+    status: str
+    top_document_ids: List[int] = []
+    error_message: Optional[str] = None
+
+
+# =============================================================================
+# INVESTIGATION TASK SCHEMAS
+# =============================================================================
+
+class InvestigationTaskBase(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    status: str = Field(default="todo", pattern="^(todo|in_progress|blocked|done)$")
+    priority: str = Field(default="medium", pattern="^(low|medium|high|critical)$")
+    due_date: Optional[datetime] = None
+    project_path: Optional[str] = Field(default=None, max_length=1024)
+    document_id: Optional[int] = Field(default=None, ge=1)
+    assignee_username: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _normalize_title(cls, value):
+        return _strip_string(value)
+
+    @field_validator("project_path", "assignee_username", mode="before")
+    @classmethod
+    def _normalize_optional_fields(cls, value):
+        return _strip_or_none(value)
+
+
+class InvestigationTaskCreate(InvestigationTaskBase):
+    pass
+
+
+class InvestigationTaskUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    status: Optional[str] = Field(default=None, pattern="^(todo|in_progress|blocked|done)$")
+    priority: Optional[str] = Field(default=None, pattern="^(low|medium|high|critical)$")
+    due_date: Optional[datetime] = None
+    project_path: Optional[str] = Field(default=None, max_length=1024)
+    document_id: Optional[int] = Field(default=None, ge=1)
+    assignee_username: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _normalize_title(cls, value):
+        return _strip_string(value)
+
+    @field_validator("project_path", "assignee_username", mode="before")
+    @classmethod
+    def _normalize_optional_fields(cls, value):
+        return _strip_or_none(value)
+
+
+class InvestigationTaskOut(BaseModel):
+    id: int
+    title: str
+    description: Optional[str]
+    status: str
+    priority: str
+    due_date: Optional[datetime]
+    project_path: Optional[str]
+    document_id: Optional[int]
+    assignee_username: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# =============================================================================
+# DEEP ANALYSIS SCHEMAS (LangExtract)
+# =============================================================================
+
+class DeepAnalysisOut(BaseModel):
+    """Schema for deep analysis output."""
+    id: int
+    document_id: int
+    extractions: Optional[str] = None      # JSON string
+    summary: Optional[str] = None
+    relationships: Optional[str] = None    # JSON string
+    model_used: Optional[str] = None
+    status: str
+    error_message: Optional[str] = None
+    processing_time_ms: Optional[int] = None
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DeepAnalysisBatchRequest(BaseModel):
+    """Schema for batch deep analysis request."""
+    document_ids: List[int] = Field(..., min_length=1, max_length=50)

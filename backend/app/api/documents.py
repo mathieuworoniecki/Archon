@@ -1,18 +1,26 @@
 """
 Archon Backend - Documents API Routes
 """
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import or_
 
 from ..database import get_db
-from ..models import Document, DocumentType
-from ..schemas import DocumentOut, DocumentDetail, DocumentListResponse
+from ..models import Document, DocumentType, User
+from ..schemas import (
+    DocumentDetail,
+    DocumentListResponse,
+    DocumentContentResponse,
+    DocumentHighlightsResponse,
+    DocumentDeleteResponse,
+    DocumentRedactionResponse,
+)
+from ..utils.auth import get_current_user, require_role
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -22,18 +30,23 @@ def list_documents(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     scan_id: Optional[int] = None,
+    project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
     file_types: Optional[List[DocumentType]] = Query(None),
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
-    sort_by: str = Query("indexed_desc", regex="^(indexed_desc|indexed_asc|name_asc|name_desc|size_desc|size_asc|modified_desc|modified_asc)$"),
-    db: Session = Depends(get_db)
+    search: Optional[str] = Query(None, min_length=1, max_length=200),
+    sort_by: str = Query("indexed_desc", pattern="^(indexed_desc|indexed_asc|name_asc|name_desc|size_desc|size_asc|modified_desc|modified_asc)$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     List documents with filters and sorting.
     
     Supports:
     - Multi-select file types
+    - Project path prefix filter
     - Date range filters (on file_modified_at)
+    - Text search on file name (case-insensitive)
     - Multiple sort options
     - Pagination with total count
     """
@@ -42,6 +55,20 @@ def list_documents(
     # Filter by scan
     if scan_id:
         query = query.filter(Document.scan_id == scan_id)
+
+    # Filter by project path prefix
+    if project_path:
+        normalized_project_path = project_path.rstrip("/\\")
+        query = query.filter(
+            or_(
+                Document.file_path == normalized_project_path,
+                Document.file_path.like(f"{normalized_project_path}/%"),
+            )
+        )
+    
+    # Filter by file name (case-insensitive)
+    if search:
+        query = query.filter(Document.file_name.ilike(f"%{search}%"))
     
     # Filter by file types (multi-select)
     if file_types:
@@ -81,7 +108,7 @@ def list_documents(
 
 
 @router.get("/{document_id}", response_model=DocumentDetail)
-def get_document(document_id: int, db: Session = Depends(get_db)):
+def get_document(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get document details including text content."""
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
@@ -89,8 +116,8 @@ def get_document(document_id: int, db: Session = Depends(get_db)):
     return document
 
 
-@router.get("/{document_id}/content")
-def get_document_content(document_id: int, db: Session = Depends(get_db)):
+@router.get("/{document_id}/content", response_model=DocumentContentResponse)
+def get_document_content(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get document text content only. Triggers lazy OCR for videos."""
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
@@ -121,7 +148,7 @@ def get_document_content(document_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{document_id}/file")
-def get_document_file(document_id: int, db: Session = Depends(get_db)):
+def get_document_file(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Get the original document file for viewing.
     
@@ -184,11 +211,12 @@ def get_document_file(document_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/{document_id}/highlights")
+@router.get("/{document_id}/highlights", response_model=DocumentHighlightsResponse)
 def get_document_highlights(
     document_id: int,
     query: str = Query(..., min_length=1),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get highlight positions for a query within a document.
@@ -237,8 +265,8 @@ def get_document_highlights(
     }
 
 
-@router.delete("/{document_id}")
-def delete_document(document_id: int, db: Session = Depends(get_db)):
+@router.delete("/{document_id}", response_model=DocumentDeleteResponse)
+def delete_document(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_role("admin", "analyst"))):
     """Delete a document from database and search indices."""
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
@@ -271,7 +299,8 @@ def delete_document(document_id: int, db: Session = Depends(get_db)):
 def get_document_thumbnail(
     document_id: int,
     size: int = Query(150, ge=50, le=500),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Get a thumbnail for images and videos.
@@ -281,7 +310,7 @@ def get_document_thumbnail(
     Uses caching for fast repeated access.
     """
     import hashlib
-    from io import BytesIO
+
     
     document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
@@ -331,7 +360,7 @@ def get_document_thumbnail(
                 path=str(cache_path),
                 media_type="image/jpeg"
             )
-        except Exception as e:
+        except Exception:
             # Fallback to original file
             return FileResponse(
                 path=str(file_path),
@@ -342,7 +371,7 @@ def get_document_thumbnail(
         # Try to extract first frame with ffmpeg
         try:
             import subprocess
-            result = subprocess.run([
+            subprocess.run([
                 'ffmpeg', '-i', str(file_path),
                 '-vf', f'scale={size}:-1',
                 '-frames:v', '1',
@@ -366,3 +395,101 @@ def get_document_thumbnail(
     
     # Not a media file
     raise HTTPException(status_code=400, detail="Not a media file")
+
+
+# ── Redaction Detection ────────────────────────────────
+
+
+class RedactionScanRequest(BaseModel):
+    """Request body for redaction scanning."""
+    document_ids: Optional[List[int]] = None  # None = scan all unscanned
+    force_rescan: bool = False
+
+
+class RedactionScanResult(BaseModel):
+    """Result of a batch redaction scan."""
+    total_scanned: int
+    redacted_count: int
+    clean_count: int
+
+
+@router.post("/redaction-scan", response_model=RedactionScanResult)
+def scan_for_redactions(
+    request: RedactionScanRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "analyst"))
+):
+    """
+    Scan documents for redaction markers.
+    
+    - If document_ids is provided, scans those specific documents.
+    - If document_ids is None, scans all documents without a redaction_status.
+    - Set force_rescan=True to re-scan already-scanned documents.
+    """
+    from ..services.redaction_detector import detect_redaction
+    
+    query = db.query(Document)
+    
+    if request.document_ids:
+        query = query.filter(Document.id.in_(request.document_ids))
+    elif not request.force_rescan:
+        query = query.filter(Document.redaction_status.is_(None))
+    
+    documents = query.limit(1000).all()
+    
+    redacted_count = 0
+    clean_count = 0
+    
+    for doc in documents:
+        result = detect_redaction(doc.text_content)
+        
+        if result.is_redacted:
+            doc.redaction_status = "confirmed" if result.confidence >= 0.7 else "suspected"
+            redacted_count += 1
+        else:
+            doc.redaction_status = "none"
+            clean_count += 1
+        
+        doc.redaction_score = result.confidence
+    
+    db.commit()
+    
+    return RedactionScanResult(
+        total_scanned=len(documents),
+        redacted_count=redacted_count,
+        clean_count=clean_count,
+    )
+
+
+@router.get("/{document_id}/redaction", response_model=DocumentRedactionResponse)
+def get_document_redaction(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get redaction detection results for a specific document.
+    Triggers on-demand scan if not yet scanned.
+    """
+    from ..services.redaction_detector import detect_redaction
+    
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Scan on-demand if not yet scanned
+    if document.redaction_status is None:
+        result = detect_redaction(document.text_content)
+        document.redaction_status = (
+            "confirmed" if result.is_redacted and result.confidence >= 0.7
+            else "suspected" if result.is_redacted
+            else "none"
+        )
+        document.redaction_score = result.confidence
+        db.commit()
+    
+    return {
+        "document_id": document.id,
+        "redaction_status": document.redaction_status,
+        "redaction_score": document.redaction_score,
+    }

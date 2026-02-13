@@ -7,14 +7,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from ..database import get_db
-from ..models import Tag, Favorite
+from ..models import Tag, Favorite, User
 from ..schemas import TagCreate, TagOut, TagUpdate
+from ..utils.auth import get_current_user
 
 router = APIRouter(prefix="/tags", tags=["tags"])
 
 
 @router.get("/", response_model=List[TagOut])
-def list_tags(db: Session = Depends(get_db)):
+def list_tags(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """List all tags with favorite counts."""
     tags = db.query(Tag).all()
     
@@ -34,7 +35,8 @@ def list_tags(db: Session = Depends(get_db)):
 @router.post("/", response_model=TagOut)
 def create_tag(
     tag: TagCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Create a new tag."""
     # Check if tag name already exists
@@ -63,7 +65,8 @@ def create_tag(
 @router.get("/{tag_id}", response_model=TagOut)
 def get_tag(
     tag_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Get a specific tag."""
     tag = db.query(Tag).filter(Tag.id == tag_id).first()
@@ -84,7 +87,8 @@ def get_tag(
 def update_tag(
     tag_id: int,
     update: TagUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Update a tag's name or color."""
     tag = db.query(Tag).filter(Tag.id == tag_id).first()
@@ -117,7 +121,8 @@ def update_tag(
 @router.delete("/{tag_id}")
 def delete_tag(
     tag_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Delete a tag. This will remove the tag from all favorites."""
     tag = db.query(Tag).filter(Tag.id == tag_id).first()

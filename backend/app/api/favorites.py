@@ -6,12 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
-from ..models import Favorite, Tag, Document
+from ..models import Favorite, Tag, Document, User
 from ..schemas import (
     FavoriteCreate, FavoriteOut, FavoriteUpdate, 
     FavoriteListResponse, TagOut
 )
 from ..services.ai_chat import get_chat_service
+from ..telemetry.request_context import get_request_id
+from ..utils.auth import get_current_user
 
 router = APIRouter(prefix="/favorites", tags=["favorites"])
 
@@ -21,7 +23,8 @@ def list_favorites(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     tag_ids: Optional[List[int]] = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """List all favorites with optional tag filtering."""
     query = db.query(Favorite).options(
@@ -62,7 +65,8 @@ def list_favorites(
 @router.post("/", response_model=FavoriteOut)
 def create_favorite(
     favorite: FavoriteCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Add a document to favorites."""
     # Check if document exists
@@ -90,6 +94,13 @@ def create_favorite(
     db.commit()
     db.refresh(db_favorite)
     
+    # Auto-trigger deep analysis in background
+    try:
+        from ..workers.tasks import run_deep_analysis
+        run_deep_analysis.delay([favorite.document_id], request_id=get_request_id())
+    except Exception:
+        pass  # Non-blocking — analysis is best-effort
+    
     return FavoriteOut(
         id=db_favorite.id,
         document_id=db_favorite.document_id,
@@ -110,7 +121,8 @@ def create_favorite(
 @router.get("/{document_id}", response_model=FavoriteOut)
 def get_favorite_by_document(
     document_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Get favorite entry for a specific document."""
     favorite = db.query(Favorite).options(
@@ -142,7 +154,8 @@ def get_favorite_by_document(
 def update_favorite(
     document_id: int,
     update: FavoriteUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Update notes or tags for a favorite."""
     favorite = db.query(Favorite).options(
@@ -182,7 +195,8 @@ def update_favorite(
 @router.delete("/{document_id}")
 def delete_favorite(
     document_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Remove a document from favorites."""
     favorite = db.query(Favorite).filter(Favorite.document_id == document_id).first()
@@ -199,7 +213,8 @@ def delete_favorite(
 @router.get("/check/{document_id}")
 def check_favorite_status(
     document_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Check if a document is in favorites."""
     favorite = db.query(Favorite).filter(Favorite.document_id == document_id).first()
@@ -213,7 +228,8 @@ def check_favorite_status(
 
 @router.post("/synthesize")
 async def synthesize_favorites(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Generate an AI synthesis of all favorited documents."""
     favorites = db.query(Favorite).options(

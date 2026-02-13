@@ -7,6 +7,8 @@ import { useTranslation } from '@/contexts/I18nContext'
 interface TimelineHeatmapProps {
     granularity?: 'day' | 'week' | 'month' | 'year'
     onDateSelect?: (date: string) => void
+    dateFrom?: string
+    dateTo?: string
     className?: string
 }
 
@@ -47,15 +49,28 @@ function getTooltipText(point: TimelineDataPoint, granularity: string): string {
 export function TimelineHeatmap({ 
     granularity = 'month', 
     onDateSelect,
+    dateFrom,
+    dateTo,
     className 
 }: TimelineHeatmapProps) {
     const { data, isLoading, error } = useTimeline({ granularity })
     const { t } = useTranslation()
 
+    // Filter data based on date range (for drill-down zoom)
+    const displayData = useMemo(() => {
+        if (!data?.data) return []
+        if (!dateFrom && !dateTo) return data.data
+        return data.data.filter(point => {
+            if (dateFrom && point.date < dateFrom) return false
+            if (dateTo && point.date > dateTo) return false
+            return true
+        })
+    }, [data, dateFrom, dateTo])
+
     const maxCount = useMemo(() => {
-        if (!data?.data.length) return 1
-        return Math.max(...data.data.map(d => d.count))
-    }, [data])
+        if (!displayData.length) return 1
+        return Math.max(...displayData.map(d => d.count))
+    }, [displayData])
 
     if (isLoading) {
         return (
@@ -66,7 +81,7 @@ export function TimelineHeatmap({
         )
     }
 
-    if (error || !data?.data.length) {
+    if (error || !displayData.length) {
         return null
     }
 
@@ -75,18 +90,18 @@ export function TimelineHeatmap({
             {/* Header */}
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Calendar className="h-4 w-4" />
-                <span>Timeline ({data.total_documents.toLocaleString()} documents)</span>
+                <span>{t('timelineHeatmap.header').replace('{count}', (data?.total_documents ?? 0).toLocaleString())}</span>
             </div>
 
             {/* Bar Chart View — much more visually impactful than tiny sparse squares */}
             <div className="flex items-end gap-1 h-40 pt-2 overflow-x-auto pb-6 relative">
-                {data.data.map((point) => {
+                {displayData.map((point) => {
                     const heightPct = maxCount > 0 ? Math.max((point.count / maxCount) * 100, 2) : 2
                     return (
                         <div
                             key={point.date}
                             className="flex flex-col items-center flex-shrink-0 group"
-                            style={{ minWidth: data.data.length > 24 ? '16px' : '28px' }}
+                            style={{ minWidth: displayData.length > 24 ? '16px' : '28px' }}
                         >
                             <button
                                 title={getTooltipText(point, granularity)}
@@ -101,7 +116,7 @@ export function TimelineHeatmap({
                             {/* Label — show on hover when too many bars */}
                             <span className={cn(
                                 "text-[9px] text-muted-foreground mt-1 whitespace-nowrap absolute bottom-0",
-                                data.data.length > 36 ? "hidden group-hover:block" : ""
+                                displayData.length > 36 ? "hidden group-hover:block" : ""
                             )}>
                                 {formatDateLabel(point.date, granularity)}
                             </span>

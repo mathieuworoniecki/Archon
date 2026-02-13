@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { API_BASE } from '@/lib/api'
+import { authFetch } from '@/lib/auth'
 
 export interface EntityAggregation {
     text: string
@@ -12,6 +13,13 @@ export interface EntityTypeSummary {
     type: string
     count: number
     unique_count: number
+}
+
+export interface EntityDocument {
+    document_id: number
+    file_name: string
+    file_path: string
+    entity_count: number
 }
 
 interface UseEntitiesOptions {
@@ -38,7 +46,7 @@ export function useEntities(options: UseEntitiesOptions = {}) {
             if (search) params.set('search', search)
             params.set('limit', limit.toString())
 
-            const response = await fetch(`${API_BASE}/entities/?${params}`)
+            const response = await authFetch(`${API_BASE}/entities/?${params}`)
             if (!response.ok) throw new Error('Failed to fetch entities')
             
             const result = await response.json()
@@ -52,14 +60,29 @@ export function useEntities(options: UseEntitiesOptions = {}) {
 
     const fetchTypeSummary = useCallback(async () => {
         try {
-            const response = await fetch(`${API_BASE}/entities/types`)
+            const response = await authFetch(`${API_BASE}/entities/types`)
             if (!response.ok) throw new Error('Failed to fetch entity types')
             
             const result = await response.json()
             setTypeSummary(result)
-        } catch (err) {
-            console.error('Failed to fetch entity types:', err)
+        } catch {
+            // non-critical: type summary is optional UI enhancement
         }
+    }, [])
+
+    const searchDocumentsByEntity = useCallback(async (
+        text: string,
+        type?: string,
+        searchLimit: number = 20
+    ): Promise<EntityDocument[]> => {
+        const params = new URLSearchParams()
+        params.set('text', text)
+        if (type) params.set('entity_type', type)
+        params.set('limit', searchLimit.toString())
+
+        const response = await authFetch(`${API_BASE}/entities/search?${params}`)
+        if (!response.ok) throw new Error('Failed to search by entity')
+        return response.json()
     }, [])
 
     useEffect(() => {
@@ -72,6 +95,7 @@ export function useEntities(options: UseEntitiesOptions = {}) {
         typeSummary,
         isLoading,
         error,
-        refetch: fetchEntities
+        refetch: fetchEntities,
+        searchDocumentsByEntity
     }
 }

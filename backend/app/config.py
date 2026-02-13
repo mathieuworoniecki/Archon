@@ -2,8 +2,11 @@
 Archon Backend - Configuration
 """
 from pathlib import Path
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -11,7 +14,7 @@ class Settings(BaseSettings):
     
     # App
     app_name: str = "Archon"
-    debug: bool = True
+    debug: bool = False
     
     # Gemini AI
     gemini_api_key: str = ""
@@ -38,15 +41,18 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
     
     # Tesseract
-    tesseract_cmd: str = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    tesseract_cmd: str = "/usr/bin/tesseract"
     
     # JWT Authentication
-    jwt_secret_key: str = "archon-change-me-in-production-use-a-long-random-string"
+    jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 30
-    
+
     # Dev: disable auth entirely (DISABLE_AUTH=true in .env)
     disable_auth: bool = False
+
+    # CORS
+    cors_origins: str = "http://localhost:5173,http://localhost:3000,http://localhost:3100,http://127.0.0.1:5173"
     
     # Paths
     @property
@@ -55,12 +61,18 @@ class Settings(BaseSettings):
         path.mkdir(parents=True, exist_ok=True)
         return path
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
 @lru_cache()
 def get_settings() -> Settings:
-    """Get cached settings instance."""
-    return Settings()
+    """Get cached settings instance with startup validation."""
+    s = Settings()
+    if not s.disable_auth and not s.jwt_secret_key:
+        raise RuntimeError(
+            "JWT_SECRET_KEY is required when auth is enabled. "
+            "Set JWT_SECRET_KEY in .env or set DISABLE_AUTH=true for development."
+        )
+    if s.jwt_secret_key and len(s.jwt_secret_key) < 32:
+        logger.warning("JWT_SECRET_KEY is shorter than 32 characters — consider using a stronger secret")
+    return s
