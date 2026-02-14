@@ -25,6 +25,16 @@ legacy_genai = None
 EMBEDDING_DIMENSION = 3072
 
 
+_DEFERRED_OCR_PREFIXES = ("[VIDEO] OCR", "[IMAGE] OCR")
+
+
+def is_deferred_ocr_placeholder(text: str | None) -> bool:
+    """True when text is a scan-time placeholder for deferred media OCR."""
+    if not text:
+        return False
+    return text.lstrip().startswith(_DEFERRED_OCR_PREFIXES)
+
+
 class EmbeddingsService:
     """Service for generating text embeddings using Google Gemini."""
     
@@ -175,6 +185,10 @@ class EmbeddingsService:
         Returns:
             List of chunks with text, chunk_index, and embedding.
         """
+        if is_deferred_ocr_placeholder(text):
+            # Never embed scan placeholders: they pollute retrieval and break RAG quality.
+            return []
+
         chunks = self.chunk_text(text)
         if not chunks:
             return []

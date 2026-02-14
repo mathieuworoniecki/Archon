@@ -13,7 +13,7 @@ Mise à jour: 2026-02-14
 
 | Ticket    | Statut | Owner | Sprint | Bloqué par | Notes |
 |-----------|--------|-------|--------|------------|-------|
-| RAG-P0-01 | todo   | TBD   | S1     | -          | Corriger OCR différée / placeholders |
+| RAG-P0-01 | done   | codex | S1     | -          | Skip placeholders `[IMAGE]/[VIDEO] OCR…` (NER+embeddings), purge Qdrant si déjà indexé, nettoyage `qdrant_ids` + tests |
 | RAG-P0-02 | todo   | TBD   | S2     | RAG-P0-01  | Service reranker + flags |
 | RAG-P0-03 | todo   | TBD   | S2     | RAG-P0-02  | Reranking dans `/api/search` |
 | RAG-P0-04 | todo   | TBD   | S3     | RAG-P0-02  | Reranking chat |

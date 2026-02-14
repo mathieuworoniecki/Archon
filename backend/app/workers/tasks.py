@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from .celery_app import celery_app
 from ..database import get_db_context
@@ -47,6 +48,15 @@ EXTRACT_WORKERS = 8       # Parallel threads for hash/extraction
 PROGRESS_INTERVAL = 200   # Update progress every N files
 NER_BATCH_SIZE = 100      # Documents per NER batch
 EMBED_BATCH_SIZE = 50     # Documents per embedding batch
+
+
+_DEFERRED_OCR_PREFIXES = ("[VIDEO] OCR", "[IMAGE] OCR")
+
+
+def _is_deferred_ocr_placeholder(text: Optional[str]) -> bool:
+    if not text:
+        return False
+    return text.lstrip().startswith(_DEFERRED_OCR_PREFIXES)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -617,11 +627,21 @@ def run_ner_batch(self, scan_id: int, request_id: Optional[str] = None):
                 return {"error": f"Scan {scan_id} not found"}
 
             # Cursor-style iteration to avoid loading all rows in memory.
-            base_query = db.query(Document).filter(
-                Document.scan_id == scan_id,
-                Document.text_content.isnot(None),
-                Document.text_content != "",
-            ).order_by(Document.id.asc())
+            placeholder_filter = or_(
+                Document.text_content.like("[VIDEO] OCR%"),
+                Document.text_content.like("[IMAGE] OCR%"),
+            )
+
+            base_query = (
+                db.query(Document)
+                .filter(
+                    Document.scan_id == scan_id,
+                    Document.text_content.isnot(None),
+                    Document.text_content != "",
+                    ~placeholder_filter,
+                )
+                .order_by(Document.id.asc())
+            )
             total_documents = base_query.count()
 
             if total_documents == 0:
@@ -647,8 +667,8 @@ def run_ner_batch(self, scan_id: int, request_id: Optional[str] = None):
 
                 for doc in batch:
                     try:
-                        # Skip videos (deferred OCR)
-                        if doc.text_content.startswith("[VIDEO]"):
+                        # Skip deferred OCR placeholders for media.
+                        if _is_deferred_ocr_placeholder(doc.text_content):
                             continue
 
                         extracted_entities = ner_service.extract_entities(
@@ -731,23 +751,68 @@ def run_embeddings_batch(self, scan_id: int, request_id: Optional[str] = None):
                 record_worker_phase(task_name, "scan_not_found", status="error")
                 return {"error": f"Scan {scan_id} not found"}
 
+            placeholder_filter = or_(
+                Document.text_content.like("[VIDEO] OCR%"),
+                Document.text_content.like("[IMAGE] OCR%"),
+            )
+
+            qdrant_service = get_qdrant_service()
+
+            # Purge already-indexed vectors for placeholder documents. This fixes old polluted indexes.
+            purged = 0
+            purge_last_id = 0
+            purge_query = (
+                db.query(Document)
+                .filter(
+                    Document.scan_id == scan_id,
+                    Document.qdrant_ids.isnot(None),
+                    Document.qdrant_ids != "",
+                    placeholder_filter,
+                )
+                .order_by(Document.id.asc())
+            )
+            while True:
+                purge_batch = (
+                    purge_query
+                    .filter(Document.id > purge_last_id)
+                    .limit(EMBED_BATCH_SIZE)
+                    .all()
+                )
+                if not purge_batch:
+                    break
+
+                for doc in purge_batch:
+                    try:
+                        qdrant_service.delete_by_document(doc.id)
+                    except Exception as e:
+                        logger.error(f"Qdrant purge error on doc {doc.id}: {e}")
+                    doc.qdrant_ids = None
+                    purged += 1
+
+                db.commit()
+                purge_last_id = purge_batch[-1].id
+
             # Cursor-style iteration to avoid loading all rows in memory.
-            base_query = db.query(Document).filter(
-                Document.scan_id == scan_id,
-                Document.text_content.isnot(None),
-                Document.text_content != "",
-                (Document.qdrant_ids.is_(None)) | (Document.qdrant_ids == ""),
-            ).order_by(Document.id.asc())
+            base_query = (
+                db.query(Document)
+                .filter(
+                    Document.scan_id == scan_id,
+                    Document.text_content.isnot(None),
+                    Document.text_content != "",
+                    (Document.qdrant_ids.is_(None)) | (Document.qdrant_ids == ""),
+                    ~placeholder_filter,
+                )
+                .order_by(Document.id.asc())
+            )
             total_documents = base_query.count()
 
             if total_documents == 0:
                 task_status = "completed_empty"
                 record_worker_phase(task_name, "completed")
-                return {"status": "completed", "processed": 0}
+                return {"status": "completed", "processed": 0, "purged": purged}
 
             record_worker_phase(task_name, "processing_started")
             embeddings_service = get_embeddings_service()
-            qdrant_service = get_qdrant_service()
             processed = 0
             errors = 0
             last_id = 0
@@ -764,7 +829,7 @@ def run_embeddings_batch(self, scan_id: int, request_id: Optional[str] = None):
 
                 for doc in batch:
                     try:
-                        if doc.text_content.startswith("[VIDEO]"):
+                        if _is_deferred_ocr_placeholder(doc.text_content):
                             continue
 
                         chunks_with_embeddings = embeddings_service.process_document(doc.text_content)
@@ -805,6 +870,7 @@ def run_embeddings_batch(self, scan_id: int, request_id: Optional[str] = None):
                 "status": "completed",
                 "processed": processed,
                 "errors": errors,
+                "purged": purged,
             }
     except Exception:
         task_status = "failed"
@@ -857,6 +923,7 @@ def process_document(self, document_id: int, request_id: Optional[str] = None):
                 if document.text_content and settings.gemini_api_key:
                     if document.qdrant_ids:
                         qdrant_service.delete_by_document(document.id)
+                        document.qdrant_ids = None
 
                     chunks_with_embeddings = embeddings_service.process_document(document.text_content)
                     if chunks_with_embeddings:
@@ -869,7 +936,9 @@ def process_document(self, document_id: int, request_id: Optional[str] = None):
                             chunks=chunks_with_embeddings
                         )
                         document.qdrant_ids = json.dumps(point_ids)
-                        db.commit()
+
+                    # Always commit the cleaned-up qdrant_ids (even when we indexed nothing).
+                    db.commit()
 
                 record_worker_phase(task_name, "completed")
                 return {"status": "completed", "document_id": document_id}
