@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { Document, getDocumentFileUrl, getDocumentThumbnailUrl } from '@/lib/api'
 import { MediaViewer } from './MediaViewer'
 import { useTranslation } from '@/contexts/I18nContext'
-import { isLikelyMediaDocument, isVideoFileName } from '@/lib/media'
+import { isImageFileName, isLikelyVisualDocument, isPdfFileName, isVideoFileName } from '@/lib/media'
 
 interface GalleryViewProps {
     documents: Document[]
@@ -15,7 +15,7 @@ interface GalleryViewProps {
 }
 
 type ViewMode = 'grid' | 'masonry' | 'list'
-type MediaFilter = 'all' | 'image' | 'video'
+type MediaFilter = 'all' | 'image' | 'video' | 'document'
 type SizeFilter = 'all' | 'small' | 'medium' | 'large'
 
 export function GalleryView({ documents, onSelectDocument, className }: GalleryViewProps) {
@@ -27,24 +27,34 @@ export function GalleryView({ documents, onSelectDocument, className }: GalleryV
     const [sizeFilter, setSizeFilter] = useState<SizeFilter>('all')
     const [showFilters, setShowFilters] = useState(false)
 
-    // Filter only media files
-    const mediaDocuments = useMemo(() => {
-        return documents.filter((doc) => isLikelyMediaDocument(doc))
+    // Keep only visually previewable files (images/videos/PDFs)
+    const visualDocuments = useMemo(() => {
+        return documents.filter((doc) => isLikelyVisualDocument(doc))
     }, [documents])
 
     const isVideo = (doc: Document) => {
         return doc.file_type === 'video' || isVideoFileName(doc.file_name)
     }
 
+    const isImage = (doc: Document) => {
+        return doc.file_type === 'image' || isImageFileName(doc.file_name)
+    }
+
+    const isDocumentPreview = (doc: Document) => {
+        return doc.file_type === 'pdf' || isPdfFileName(doc.file_name)
+    }
+
     // Apply filters
     const filteredDocuments = useMemo(() => {
-        let result = mediaDocuments
+        let result = visualDocuments
 
         // Type filter
         if (mediaFilter === 'image') {
-            result = result.filter(doc => !isVideo(doc))
+            result = result.filter(doc => isImage(doc))
         } else if (mediaFilter === 'video') {
             result = result.filter(doc => isVideo(doc))
+        } else if (mediaFilter === 'document') {
+            result = result.filter(doc => isDocumentPreview(doc))
         }
 
         // Size filter
@@ -57,7 +67,7 @@ export function GalleryView({ documents, onSelectDocument, className }: GalleryV
         }
 
         return result
-    }, [mediaDocuments, mediaFilter, sizeFilter])
+    }, [visualDocuments, mediaFilter, sizeFilter])
 
     const getThumbnailUrl = (docItem: Document) => {
         return getDocumentThumbnailUrl(docItem.id)
@@ -73,7 +83,7 @@ export function GalleryView({ documents, onSelectDocument, className }: GalleryV
 
     const activeFilterCount = (mediaFilter !== 'all' ? 1 : 0) + (sizeFilter !== 'all' ? 1 : 0)
 
-    if (mediaDocuments.length === 0) {
+    if (visualDocuments.length === 0) {
         return (
             <div className={cn("flex flex-col items-center justify-center p-12 text-center text-muted-foreground", className)}>
                 <ImageIcon className="h-16 w-16 mb-4 opacity-30" />
@@ -89,7 +99,7 @@ export function GalleryView({ documents, onSelectDocument, className }: GalleryV
             <div className="flex items-center justify-between p-3 border-b bg-card/50">
                 <div className="flex items-center gap-2">
                     <span className="text-sm text-muted-foreground">
-                        {filteredDocuments.length} / {mediaDocuments.length} {t('gallery.mediaCount')}
+                        {filteredDocuments.length} / {visualDocuments.length} {t('gallery.mediaCount')}
                     </span>
                     <Button
                         variant={showFilters ? "default" : "outline"}
@@ -163,7 +173,7 @@ export function GalleryView({ documents, onSelectDocument, className }: GalleryV
                         <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
                         <span className="text-xs text-muted-foreground">{t('gallery.type')}:</span>
                         <div className="flex items-center gap-0.5">
-                            {(['all', 'image', 'video'] as MediaFilter[]).map(f => (
+                            {(['all', 'image', 'video', 'document'] as MediaFilter[]).map(f => (
                                 <Button
                                     key={f}
                                     variant={mediaFilter === f ? 'default' : 'ghost'}
@@ -171,7 +181,7 @@ export function GalleryView({ documents, onSelectDocument, className }: GalleryV
                                     className="h-6 px-2 text-xs"
                                     onClick={() => setMediaFilter(f)}
                                 >
-                                    {f === 'all' ? t('gallery.all') : f === 'image' ? t('gallery.images') : t('gallery.videos')}
+                                    {f === 'all' ? t('gallery.all') : f === 'image' ? t('gallery.images') : f === 'video' ? t('gallery.videos') : t('gallery.documents')}
                                 </Button>
                             ))}
                         </div>

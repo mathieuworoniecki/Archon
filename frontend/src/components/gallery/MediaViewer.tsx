@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { getDocumentFileUrl, getDocument, getDocumentThumbnailUrl, Document } from '@/lib/api'
 import { useTranslation } from '@/contexts/I18nContext'
-import { isImageFileName, isVideoFileName } from '@/lib/media'
+import { isImageFileName, isPdfFileName, isVideoFileName } from '@/lib/media'
 
 interface MediaViewerProps {
     documents: Document[]
@@ -27,6 +27,7 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
     const currentDoc = documents[currentIndex]
     const isVideo = !!currentDoc && (currentDoc.file_type === 'video' || isVideoFileName(currentDoc.file_name))
     const isImage = !!currentDoc && (currentDoc.file_type === 'image' || isImageFileName(currentDoc.file_name))
+    const isPdf = !!currentDoc && (currentDoc.file_type === 'pdf' || isPdfFileName(currentDoc.file_name))
 
     useEffect(() => {
         setCurrentIndex(initialIndex)
@@ -90,6 +91,7 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
     if (!isOpen || !currentDoc) return null
 
     const mediaUrl = getDocumentFileUrl(currentDoc.id)
+    const previewUrl = isPdf ? getDocumentThumbnailUrl(currentDoc.id, 1400) : mediaUrl
 
     return (
         <div className="fixed inset-0 z-50 bg-black/95 flex flex-col">
@@ -104,7 +106,7 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
                     </span>
                 </div>
                 <div className="flex items-center gap-2">
-                    {isImage && (
+                    {(isImage || isPdf) && (
                         <>
                             <Button variant="ghost" size="sm" onClick={() => setZoom(z => Math.max(z - 0.25, 0.5))}>
                                 <ZoomOut className="h-4 w-4" />
@@ -115,7 +117,7 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
                             </Button>
                         </>
                     )}
-                    {isImage && currentDoc.has_ocr && (
+                    {(isImage || isPdf) && currentDoc.has_ocr && (
                         <Button
                             variant={showOcr ? 'default' : 'ghost'}
                             size="sm"
@@ -180,9 +182,9 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
                             onPlay={() => setIsPlaying(true)}
                             onPause={() => setIsPlaying(false)}
                         />
-                    ) : isImage ? (
+                    ) : (isImage || isPdf) ? (
                         <img
-                            src={mediaUrl}
+                            src={previewUrl}
                             alt={currentDoc.file_name}
                             style={{ transform: `scale(${zoom})`, transformOrigin: 'center' }}
                             className="max-h-[80vh] max-w-full object-contain transition-transform duration-200 rounded-lg shadow-2xl"

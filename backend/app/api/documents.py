@@ -298,15 +298,16 @@ def delete_document(document_id: int, db: Session = Depends(get_db), current_use
 @router.get("/{document_id}/thumbnail")
 def get_document_thumbnail(
     document_id: int,
-    size: int = Query(150, ge=50, le=500),
+    size: int = Query(150, ge=50, le=2000),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get a thumbnail for images and videos.
+    Get a thumbnail for images, videos and PDFs.
     
     For images: Returns a resized JPEG thumbnail.
     For videos: Returns first frame as thumbnail (if ffmpeg available).
+    For PDFs: Returns first page thumbnail.
     Uses caching for fast repeated access.
     """
     import hashlib
@@ -337,9 +338,10 @@ def get_document_thumbnail(
             media_type="image/jpeg"
         )
     
-    # Generate thumbnail for images
+    # Generate thumbnail for images/videos/PDFs
     image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
     video_exts = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
+    pdf_exts = {".pdf"}
     
     if ext in image_exts:
         try:
@@ -392,6 +394,36 @@ def get_document_thumbnail(
             media_type="image/jpeg",
             status_code=204
         )
+
+    elif ext in pdf_exts:
+        try:
+            import fitz  # PyMuPDF
+            from PIL import Image
+
+            pdf_doc = fitz.open(file_path)
+            if pdf_doc.page_count == 0:
+                pdf_doc.close()
+                raise ValueError("PDF has no pages")
+
+            page = pdf_doc.load_page(0)
+            pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+            pdf_doc.close()
+
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            img.thumbnail((size, size), Image.Resampling.LANCZOS)
+            img.save(cache_path, "JPEG", quality=80, optimize=True)
+
+            return FileResponse(
+                path=str(cache_path),
+                media_type="image/jpeg"
+            )
+        except Exception:
+            # Fallback placeholder for unreadable PDF thumbnails
+            return Response(
+                content=b'',
+                media_type="image/jpeg",
+                status_code=204
+            )
     
     # Not a media file
     raise HTTPException(status_code=400, detail="Not a media file")

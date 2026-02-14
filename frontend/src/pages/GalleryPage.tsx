@@ -7,7 +7,7 @@ import { Document, API_BASE } from '@/lib/api'
 import { authFetch } from '@/lib/auth'
 import { useTranslation } from '@/contexts/I18nContext'
 import { useProject } from '@/contexts/ProjectContext'
-import { isLikelyMediaDocument } from '@/lib/media'
+import { isLikelyVisualDocument } from '@/lib/media'
 
 const PAGE_SIZE = 50
 
@@ -43,6 +43,7 @@ export function GalleryPage() {
                 params.set('skip', String(cursor))
                 params.append('file_types', 'image')
                 params.append('file_types', 'video')
+                params.append('file_types', 'pdf')
                 params.append('file_types', 'unknown')
                 if (selectedProject?.path) params.set('project_path', selectedProject.path)
 
@@ -51,7 +52,7 @@ export function GalleryPage() {
 
                 const data = await response.json()
                 const rawDocs: Document[] = data.documents || []
-                const filtered = rawDocs.filter((doc) => isLikelyMediaDocument(doc))
+                const filtered = rawDocs.filter((doc) => isLikelyVisualDocument(doc))
                 for (const doc of filtered) {
                     if (!localSeen.has(doc.id)) {
                         localSeen.add(doc.id)
@@ -124,7 +125,7 @@ export function GalleryPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     query: searchInput,
-                    file_types: ['image', 'video', 'unknown'],
+                    file_types: ['image', 'video', 'pdf', 'unknown'],
                     limit: 100,
                     project_path: selectedProject?.path
                 })
@@ -141,7 +142,7 @@ export function GalleryPage() {
                     has_ocr: true,
                     file_modified_at: null,
                     indexed_at: ''
-                })).filter((doc: Document) => isLikelyMediaDocument(doc))
+                })).filter((doc: Document) => isLikelyVisualDocument(doc))
                 setDocuments(searchDocs)
                 setSearchQuery(searchInput)
             }
