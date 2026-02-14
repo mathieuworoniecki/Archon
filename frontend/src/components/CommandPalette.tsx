@@ -5,6 +5,7 @@ import {
     Sparkles, Star, Scan, ArrowRight, Command
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { loadRecentSearches } from '@/lib/recentSearches'
 
 interface PaletteItem {
     id: string
@@ -14,22 +15,6 @@ interface PaletteItem {
     action: () => void
     shortcut?: string
     description?: string
-}
-
-const RECENT_SEARCHES_KEY = 'archon_recent_searches'
-
-function getRecentSearches(): string[] {
-    try {
-        return JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY) || '[]')
-    } catch {
-        return []
-    }
-}
-
-export function addRecentSearch(query: string) {
-    const recent = getRecentSearches()
-    const updated = [query, ...recent.filter(s => s !== query)].slice(0, 10)
-    localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated))
 }
 
 interface CommandPaletteProps {
@@ -55,7 +40,7 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
     ], [navigate, onClose])
 
     const recentItems: PaletteItem[] = useMemo(() => {
-        return getRecentSearches().map((s, i) => ({
+        return loadRecentSearches().map((s, i) => ({
             id: `recent-${i}`,
             label: s,
             section: 'recent' as const,

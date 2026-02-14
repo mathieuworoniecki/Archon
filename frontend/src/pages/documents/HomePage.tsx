@@ -16,6 +16,7 @@ import { useTranslation } from '@/contexts/I18nContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { cn } from '@/lib/utils'
 import { getDateFromDays, getDateRangeFromParam } from '@/lib/dateRange'
+import { addRecentSearch, clearRecentSearches, loadRecentSearches } from '@/lib/recentSearches'
 import {
     Search,
     FileText,
@@ -49,7 +50,6 @@ type PendingViewerSelection =
     | { kind: 'index'; index: number }
     | { kind: 'edge'; edge: 'first' | 'last' }
 
-const RECENT_SEARCHES_KEY = 'archon_recent_searches'
 const DOCUMENTS_LAYOUT_KEY = 'archon_documents_layout'
 const GRID_THUMB_SIZE_KEY = 'archon_grid_thumb_size'
 const SEARCH_PAGE_SIZE_KEY = 'archon_search_page_size'
@@ -148,17 +148,11 @@ export function HomePage() {
     const [batchScanStatus, setBatchScanStatus] = useState<'idle' | 'loading' | 'triggered' | 'complete'>('idle')
     const [fileTypeCounts, setFileTypeCounts] = useState<Record<string, number>>({})
     const pendingViewerSelectionRef = useRef<PendingViewerSelection | null>(null)
+    const [recentSearches, setRecentSearches] = useState<string[]>(() => loadRecentSearches())
+    const [isRecentDropdownOpen, setIsRecentDropdownOpen] = useState(false)
 
     const saveRecentSearch = useCallback((query: string) => {
-        const normalized = query.trim()
-        if (!normalized) return
-        try {
-            const current: string[] = JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY) || '[]')
-            const updated = [normalized, ...current.filter((entry) => entry !== normalized)].slice(0, 10)
-            localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated))
-        } catch {
-            // Ignore localStorage errors
-        }
+        setRecentSearches(addRecentSearch(query))
     }, [])
 
     const updateTypesInUrl = useCallback((nextTypes: FileType[]) => {
@@ -510,6 +504,16 @@ export function HomePage() {
     const currentLimit = browse.filters.limit ?? 50
     const activeContentQuery = (queryParam || (queryMode === 'content' ? lastQuery : '')).trim()
     const isContentSearchActive = queryMode === 'content' && Boolean(activeContentQuery)
+
+    const recentSuggestions = useMemo(() => {
+        if (queryMode !== 'content') return []
+        const q = queryInput.trim().toLowerCase()
+        const base = recentSearches
+        if (!q) return base.slice(0, 8)
+        return base.filter((entry) => entry.toLowerCase().includes(q)).slice(0, 8)
+    }, [queryInput, queryMode, recentSearches])
+
+    const showRecentSuggestions = queryMode === 'content' && isRecentDropdownOpen && recentSuggestions.length > 0
 
     const hasActiveFilters = Boolean(
         selectedFileTypes.length > 0
@@ -876,8 +880,48 @@ export function HomePage() {
                                                         }
                                                         value={queryInput}
                                                         onChange={(e) => setQueryInput(e.target.value)}
+                                                        onFocus={() => setIsRecentDropdownOpen(true)}
+                                                        onBlur={() => setIsRecentDropdownOpen(false)}
                                                         className="pl-8 h-9 text-sm"
                                                     />
+
+                                                    {showRecentSuggestions && (
+                                                        <div className="absolute left-0 right-0 top-full mt-1 z-50 overflow-hidden rounded-md border bg-popover shadow-lg">
+                                                            <div className="flex items-center justify-between gap-2 px-2 py-1 bg-muted/30">
+                                                                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                                                                    {t('home.recentSearches')}
+                                                                </span>
+                                                                <button
+                                                                    type="button"
+                                                                    className="text-[10px] text-muted-foreground hover:text-foreground"
+                                                                    onMouseDown={(e) => e.preventDefault()}
+                                                                    onClick={() => {
+                                                                        clearRecentSearches()
+                                                                        setRecentSearches([])
+                                                                    }}
+                                                                >
+                                                                    {t('common.clear')}
+                                                                </button>
+                                                            </div>
+                                                            <div className="max-h-56 overflow-auto">
+                                                                {recentSuggestions.map((entry) => (
+                                                                    <button
+                                                                        key={entry}
+                                                                        type="button"
+                                                                        className="w-full px-2 py-2 text-left text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                                                                        onMouseDown={(e) => e.preventDefault()}
+                                                                        onClick={() => {
+                                                                            setIsRecentDropdownOpen(false)
+                                                                            setQueryInput(entry)
+                                                                            runContentSearch(entry)
+                                                                        }}
+                                                                    >
+                                                                        <span className="block truncate">{entry}</span>
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                 </div>
                                                 <Button type="submit" size="sm" className="w-full gap-1.5" disabled={queryMode === 'content' && isLoading}>
                                                     {queryMode === 'content' ? <Sparkles className="h-3.5 w-3.5" /> : <Filter className="h-3.5 w-3.5" />}
