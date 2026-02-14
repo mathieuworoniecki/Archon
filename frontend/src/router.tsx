@@ -1,6 +1,7 @@
 import { createBrowserRouter, RouterProvider, Outlet, Link, useLocation, useNavigate, useSearchParams, Navigate } from 'react-router-dom'
-import { Shield, Github, Activity, FileText, Search, Star, Scan, Sparkles, Calendar, Image as ImageIcon, Sun, Moon, LogOut, FolderOpen, Users, Network, ScrollText, BellRing, CheckSquare } from 'lucide-react'
+import { Shield, Github, Activity, FileText, Search, Star, Scan, Sparkles, Calendar, Image as ImageIcon, Sun, Moon, LogOut, FolderOpen, Users, Network, ScrollText, BellRing, CheckSquare, MoreHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useStats } from '@/hooks/useStats'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { useTheme } from '@/hooks/useTheme'
@@ -198,10 +199,15 @@ function RootLayout() {
         [
             { path: '/gallery', label: t('nav.gallery'), icon: ImageIcon },
             { path: '/favorites', label: t('nav.favorites'), icon: Star },
-            { path: '/watchlist', label: t('nav.watchlist'), icon: BellRing },
-            { path: '/tasks', label: t('nav.tasks'), icon: CheckSquare },
         ],
     ]
+
+    // Less frequently used tools: keep accessible but out of the primary nav.
+    const overflowItems = [
+        { path: '/watchlist', label: t('nav.watchlist'), icon: BellRing },
+        { path: '/tasks', label: t('nav.tasks'), icon: CheckSquare },
+    ]
+    const isOverflowActive = overflowItems.some(({ path }) => location.pathname === path)
 
     return (
         <>
@@ -250,6 +256,42 @@ function RootLayout() {
                                             </Link>
                                         )
                                     })}
+
+                                    {groupIdx === navGroups.length - 1 && overflowItems.length > 0 && (
+                                        <>
+                                            <div className="w-px h-5 bg-[rgba(255,255,255,0.12)] mx-0.5" />
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button
+                                                        variant={isOverflowActive ? 'default' : 'ghost'}
+                                                        size="sm"
+                                                        className="h-7 w-7 p-0"
+                                                        title={t('nav.more')}
+                                                        aria-label={t('nav.more')}
+                                                    >
+                                                        <MoreHorizontal className="h-3.5 w-3.5" />
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end">
+                                                    {overflowItems.map(({ path, label, icon: Icon }) => {
+                                                        const isActive = location.pathname === path
+                                                        return (
+                                                            <DropdownMenuItem
+                                                                key={path}
+                                                                onClick={() => navigate(path)}
+                                                                className={isActive ? 'bg-accent' : undefined}
+                                                            >
+                                                                <div className="flex items-center gap-2">
+                                                                    <Icon className="h-4 w-4 text-muted-foreground" />
+                                                                    <span className="text-sm">{label}</span>
+                                                                </div>
+                                                            </DropdownMenuItem>
+                                                        )
+                                                    })}
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
+                                        </>
+                                    )}
                                 </div>
                             ))}
                         </nav>
