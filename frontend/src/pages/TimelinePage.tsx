@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
     Calendar,
@@ -183,6 +183,7 @@ export function TimelinePage() {
     const [periodTotal, setPeriodTotal] = useState(0)
     const [isLoadingPeriodDocs, setIsLoadingPeriodDocs] = useState(false)
     const [periodDocsError, setPeriodDocsError] = useState<string | null>(null)
+    const selectedPeriodCardRef = useRef<HTMLDivElement | null>(null)
 
     const { t, locale } = useTranslation()
     const navigate = useNavigate()
@@ -341,6 +342,29 @@ export function TimelinePage() {
         () => visiblePoints.reduce((acc, point) => acc + point.count, 0),
         [visiblePoints]
     )
+
+    const loneBucketDate = visiblePoints.length === 1 ? visiblePoints[0]?.date : null
+
+    // If the timeline collapses to a single visible bucket, auto-select it so the page
+    // immediately shows the document list (avoids the "empty" feeling).
+    useEffect(() => {
+        if (selectedBucket) return
+        if (isLoading) return
+        if (!loneBucketDate) return
+        setSelectedBucket(loneBucketDate)
+    }, [isLoading, loneBucketDate, selectedBucket])
+
+    // On small screens, scroll the selected period panel into view after selection.
+    useEffect(() => {
+        if (!selectedBucket) return
+        try {
+            if (window.matchMedia && window.matchMedia('(max-width: 1024px)').matches) {
+                selectedPeriodCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }
+        } catch {
+            // ignore
+        }
+    }, [selectedBucket])
 
     const sortedVisible = useMemo(
         () => [...visiblePoints].sort((a, b) => b.count - a.count),
@@ -753,35 +777,125 @@ export function TimelinePage() {
                 )}
 
                 {(!isLoading && !error && totalDocuments === 0) ? null : (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                {t('timeline.heatmap')}
-                                {canZoomIn && (
-                                    <span className="text-xs font-normal text-muted-foreground">
-                                        — {t('timeline.clickToZoom')}
-                                    </span>
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                        <Card className="lg:col-span-2">
+                            <CardHeader>
+                                <CardTitle className="flex items-center gap-2">
+                                    {t('timeline.heatmap')}
+                                    {canZoomIn && (
+                                        <span className="text-xs font-normal text-muted-foreground">
+                                            — {t('timeline.clickToZoom')}
+                                        </span>
+                                    )}
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                {isLoading && (
+                                    <div className="mb-3 h-48"><TimelineSkeleton /></div>
                                 )}
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            {isLoading && (
-                                <div className="mb-3 h-48"><TimelineSkeleton /></div>
+                                <TimelineHeatmap
+                                    granularity={currentGranularity}
+                                    dataPoints={timelinePoints}
+                                    totalDocuments={totalDocuments}
+                                    isLoading={isLoading}
+                                    error={error}
+                                    onRetry={refetch}
+                                    onDateSelect={handleDateClick}
+                                    dateFrom={effectiveDateFrom}
+                                    dateTo={effectiveDateTo}
+                                    selectedDate={selectedBucket}
+                                />
+                            </CardContent>
+                        </Card>
+
+                        <Card
+                            ref={selectedPeriodCardRef}
+                            className={cn(
+                                selectedBucket && 'border-primary/40',
+                                'lg:sticky lg:top-6 lg:self-start'
                             )}
-                            <TimelineHeatmap
-                                granularity={currentGranularity}
-                                dataPoints={timelinePoints}
-                                totalDocuments={totalDocuments}
-                                isLoading={isLoading}
-                                error={error}
-                                onRetry={refetch}
-                                onDateSelect={handleDateClick}
-                                dateFrom={effectiveDateFrom}
-                                dateTo={effectiveDateTo}
-                                selectedDate={selectedBucket}
-                            />
-                        </CardContent>
-                    </Card>
+                        >
+                            <CardHeader className="pb-3">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <CardTitle className="text-base">
+                                        {t('timeline.selectedPeriod')}
+                                        {selectedPeriodLabel && (
+                                            <span className="ml-2 text-primary">{selectedPeriodLabel}</span>
+                                        )}
+                                    </CardTitle>
+                                    <div className="flex items-center gap-2">
+                                        <Button size="sm" variant="outline" onClick={handleOpenSearchWorkspace} className="gap-1.5">
+                                            <Search className="h-3.5 w-3.5" />
+                                            {t('timeline.openSearchWorkspace')}
+                                        </Button>
+                                        {periodDocuments[0] && (
+                                            <Button
+                                                size="sm"
+                                                onClick={() => navigate(`/?doc=${periodDocuments[0].id}`)}
+                                                className="gap-1.5"
+                                            >
+                                                <Eye className="h-3.5 w-3.5" />
+                                                {t('timeline.openDocument')}
+                                            </Button>
+                                        )}
+                                    </div>
+                                </div>
+                            </CardHeader>
+                            <CardContent>
+                                {!selectedBucket ? (
+                                    <p className="text-sm text-muted-foreground">{t('timeline.selectPeriodHint')}</p>
+                                ) : (
+                                    <div className="space-y-3">
+                                        <div className="text-xs text-muted-foreground">
+                                            {selectedRange
+                                                ? t('timeline.periodRange').replace('{from}', selectedRange.from).replace('{to}', selectedRange.to)
+                                                : '-'}
+                                            {' · '}
+                                            {formatNumber(selectedBucketCount)} {t('timeline.documents')}
+                                            {' · '}
+                                            {t('timeline.docsShown').replace('{count}', formatNumber(periodTotal))}
+                                        </div>
+
+                                        {isLoadingPeriodDocs && (
+                                            <div className="space-y-2">
+                                                <TimelineSkeleton />
+                                            </div>
+                                        )}
+
+                                        {!isLoadingPeriodDocs && periodDocsError && (
+                                            <p className="text-sm text-red-400">{t('timeline.error')}: {periodDocsError}</p>
+                                        )}
+
+                                        {!isLoadingPeriodDocs && !periodDocsError && periodDocuments.length === 0 && (
+                                            <p className="text-sm text-muted-foreground">{t('timeline.noDocumentsInPeriod')}</p>
+                                        )}
+
+                                        {!isLoadingPeriodDocs && !periodDocsError && periodDocuments.length > 0 && (
+                                            <div className="space-y-2">
+                                                {periodDocuments.slice(0, 20).map((doc) => (
+                                                    <button
+                                                        key={doc.id}
+                                                        onClick={() => navigate(`/?doc=${doc.id}`)}
+                                                        className="flex w-full items-center justify-between rounded-md border border-border/60 bg-card/30 px-3 py-2 text-left hover:border-primary/40 hover:bg-muted/30"
+                                                    >
+                                                        <div className="min-w-0 pr-3">
+                                                            <p className="truncate text-sm font-medium">{doc.file_name}</p>
+                                                            <p className="text-xs text-muted-foreground truncate">
+                                                                {formatDate(doc.file_modified_at || doc.indexed_at, locale)}
+                                                            </p>
+                                                        </div>
+                                                        <Badge variant="outline" className={typeBadgeClass(doc.file_type)}>
+                                                            {doc.file_type}
+                                                        </Badge>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+                    </div>
                 )}
 
                 {visiblePoints.length > 0 && (
@@ -841,87 +955,6 @@ export function TimelinePage() {
                     </div>
                 )}
 
-                <Card className={cn(selectedBucket && 'border-primary/40')}>
-                    <CardHeader>
-                        <CardTitle className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                                <span>{t('timeline.selectedPeriod')}</span>
-                                {selectedPeriodLabel && (
-                                    <span className="ml-2 text-primary">{selectedPeriodLabel}</span>
-                                )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <Button size="sm" variant="outline" onClick={handleOpenSearchWorkspace} className="gap-1.5">
-                                    <Search className="h-3.5 w-3.5" />
-                                    {t('timeline.openSearchWorkspace')}
-                                </Button>
-                                {periodDocuments[0] && (
-                                    <Button
-                                        size="sm"
-                                        onClick={() => navigate(`/?doc=${periodDocuments[0].id}`)}
-                                        className="gap-1.5"
-                                    >
-                                        <Eye className="h-3.5 w-3.5" />
-                                        {t('timeline.openDocument')}
-                                    </Button>
-                                )}
-                            </div>
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        {!selectedBucket ? (
-                            <p className="text-sm text-muted-foreground">{t('timeline.selectPeriodHint')}</p>
-                        ) : (
-                            <div className="space-y-3">
-                                <div className="text-xs text-muted-foreground">
-                                    {selectedRange
-                                        ? t('timeline.periodRange').replace('{from}', selectedRange.from).replace('{to}', selectedRange.to)
-                                        : '-'}
-                                    {' · '}
-                                    {formatNumber(selectedBucketCount)} {t('timeline.documents')}
-                                    {' · '}
-                                    {t('timeline.docsShown').replace('{count}', formatNumber(periodTotal))}
-                                </div>
-
-                                {isLoadingPeriodDocs && (
-                                    <div className="space-y-2">
-                                        <TimelineSkeleton />
-                                    </div>
-                                )}
-
-                                {!isLoadingPeriodDocs && periodDocsError && (
-                                    <p className="text-sm text-red-400">{t('timeline.error')}: {periodDocsError}</p>
-                                )}
-
-                                {!isLoadingPeriodDocs && !periodDocsError && periodDocuments.length === 0 && (
-                                    <p className="text-sm text-muted-foreground">{t('timeline.noDocumentsInPeriod')}</p>
-                                )}
-
-                                {!isLoadingPeriodDocs && !periodDocsError && periodDocuments.length > 0 && (
-                                    <div className="space-y-2">
-                                        {periodDocuments.slice(0, 20).map((doc) => (
-                                            <button
-                                                key={doc.id}
-                                                onClick={() => navigate(`/?doc=${doc.id}`)}
-                                                className="flex w-full items-center justify-between rounded-md border border-border/60 bg-card/30 px-3 py-2 text-left hover:border-primary/40 hover:bg-muted/30"
-                                            >
-                                                <div className="min-w-0 pr-3">
-                                                    <p className="truncate text-sm font-medium">{doc.file_name}</p>
-                                                    <p className="text-xs text-muted-foreground truncate">
-                                                        {formatDate(doc.file_modified_at || doc.indexed_at, locale)}
-                                                    </p>
-                                                </div>
-                                                <Badge variant="outline" className={typeBadgeClass(doc.file_type)}>
-                                                    {doc.file_type}
-                                                </Badge>
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
             </div>
         </div>
     )
