@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Network, Maximize2, Minimize2, Settings2, AlertTriangle, RefreshCw, Route, X, Palette } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -32,6 +33,9 @@ interface GraphData {
 export function GraphPage() {
     const { selectedProject } = useProject()
     const { t } = useTranslation()
+    const navigate = useNavigate()
+    const [searchParams] = useSearchParams()
+    const focusNodeId = searchParams.get('focus')
     const [data, setData] = useState<GraphData | null>(null)
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -77,6 +81,7 @@ export function GraphPage() {
             params.set('limit', nodeLimit.toString())
             params.set('min_count', minCount.toString())
             if (selectedProject?.path) params.set('project_path', selectedProject.path)
+            if (focusNodeId) params.set('focus', focusNodeId)
 
             const res = await authFetch(`${API_BASE}/entities/graph?${params}`)
             if (!res.ok) {
@@ -93,7 +98,7 @@ export function GraphPage() {
         } finally {
             if (requestId === requestSeqRef.current) setIsLoading(false)
         }
-    }, [activeType, nodeLimit, minCount, selectedProject?.path])
+    }, [activeType, nodeLimit, minCount, selectedProject?.path, focusNodeId])
 
     useEffect(() => { fetchGraph() }, [fetchGraph])
 
@@ -110,7 +115,10 @@ export function GraphPage() {
             }
             return
         }
-        window.open(`/entities?search=${encodeURIComponent(node.text)}`, '_self')
+        const params = new URLSearchParams()
+        params.set('type', node.type)
+        params.set('focus', node.id)
+        navigate(`/entities?${params}`)
     }
 
     const toggleFullscreen = () => {
@@ -173,6 +181,7 @@ export function GraphPage() {
 
     const graphNodes = graphView?.nodes ?? []
     const graphEdges = graphView?.edges ?? []
+    const focusMissing = !!focusNodeId && !isLoading && graphNodes.length > 0 && !graphNodes.some((n) => n.id === focusNodeId)
 
     // BFS shortest path
     const shortestPath = useMemo(() => {
@@ -435,6 +444,15 @@ export function GraphPage() {
                         </span>
                     </div>
                 )}
+
+                {focusMissing && (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                        <span>
+                            {t('graph.focusMissing')}
+                        </span>
+                    </div>
+                )}
             </div>
 
             {/* Graph Area */}
@@ -475,6 +493,7 @@ export function GraphPage() {
                             height={dimensions.height}
                             onNodeClick={handleNodeClick}
                             communities={showCommunities ? communities : undefined}
+                            focusNodeId={focusNodeId}
                         />
                     ) : (
                         <Card className="h-full flex items-center justify-center">

@@ -1,11 +1,11 @@
-import { Users, Building2, MapPin, Hash } from 'lucide-react'
+import { Users, Building2, MapPin, Hash, Calendar } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 // ─── Shared Entity Type Configuration ────────────────────────────────────────
 // Single source of truth for entity type visuals (icon, color).
 // Labels come from i18n — use getEntityLabel() instead of hardcoding.
 
-export type EntityType = 'PER' | 'ORG' | 'LOC' | 'MISC'
+export type EntityType = 'PER' | 'ORG' | 'LOC' | 'MISC' | 'DATE'
 
 export interface EntityTypeConfig {
     icon: LucideIcon
@@ -19,6 +19,7 @@ export const ENTITY_TYPES: Record<EntityType, EntityTypeConfig> = {
     ORG:  { icon: Building2, color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', ring: 'ring-emerald-500/30' },
     LOC:  { icon: MapPin,   color: 'text-amber-400',   bg: 'bg-amber-500/10 border-amber-500/20',   ring: 'ring-amber-500/30' },
     MISC: { icon: Hash,     color: 'text-purple-400',  bg: 'bg-purple-500/10 border-purple-500/20',  ring: 'ring-purple-500/30' },
+    DATE: { icon: Calendar, color: 'text-pink-400',    bg: 'bg-pink-500/10 border-pink-500/20',       ring: 'ring-pink-500/30' },
 }
 
 // ─── i18n label resolution ───────────────────────────────────────────────────
@@ -30,6 +31,7 @@ const ENTITY_LABEL_KEYS: Record<EntityType, string> = {
     ORG:  'entities.organizations',
     LOC:  'entities.locations',
     MISC: 'entities.misc',
+    DATE: 'entities.dates',
 }
 
 /**

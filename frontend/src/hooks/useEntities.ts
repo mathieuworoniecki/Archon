@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { API_BASE } from '@/lib/api'
 import { authFetch } from '@/lib/auth'
+import { useProject } from '@/contexts/ProjectContext'
 
 export interface EntityAggregation {
     text: string
@@ -26,15 +27,18 @@ interface UseEntitiesOptions {
     entityType?: 'PER' | 'ORG' | 'LOC' | 'MISC' | 'DATE'
     search?: string
     limit?: number
+    projectPath?: string
 }
 
 export function useEntities(options: UseEntitiesOptions = {}) {
+    const { selectedProject } = useProject()
     const [entities, setEntities] = useState<EntityAggregation[]>([])
     const [typeSummary, setTypeSummary] = useState<EntityTypeSummary[]>([])
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
 
     const { entityType, search, limit = 50 } = options
+    const projectPath = options.projectPath ?? selectedProject?.path
 
     const fetchEntities = useCallback(async () => {
         setIsLoading(true)
@@ -45,6 +49,7 @@ export function useEntities(options: UseEntitiesOptions = {}) {
             if (entityType) params.set('entity_type', entityType)
             if (search) params.set('search', search)
             params.set('limit', limit.toString())
+            if (projectPath) params.set('project_path', projectPath)
 
             const response = await authFetch(`${API_BASE}/entities/?${params}`)
             if (!response.ok) throw new Error('Failed to fetch entities')
@@ -60,7 +65,10 @@ export function useEntities(options: UseEntitiesOptions = {}) {
 
     const fetchTypeSummary = useCallback(async () => {
         try {
-            const response = await authFetch(`${API_BASE}/entities/types`)
+            const params = new URLSearchParams()
+            if (projectPath) params.set('project_path', projectPath)
+
+            const response = await authFetch(`${API_BASE}/entities/types?${params}`)
             if (!response.ok) throw new Error('Failed to fetch entity types')
             
             const result = await response.json()
@@ -73,17 +81,47 @@ export function useEntities(options: UseEntitiesOptions = {}) {
     const searchDocumentsByEntity = useCallback(async (
         text: string,
         type?: string,
-        searchLimit: number = 20
+        searchLimit: number = 20,
+        opts?: { exact?: boolean }
     ): Promise<EntityDocument[]> => {
         const params = new URLSearchParams()
         params.set('text', text)
         if (type) params.set('entity_type', type)
         params.set('limit', searchLimit.toString())
+        if (projectPath) params.set('project_path', projectPath)
+        params.set('exact', String(opts?.exact ?? true))
 
         const response = await authFetch(`${API_BASE}/entities/search?${params}`)
         if (!response.ok) throw new Error('Failed to search by entity')
         return response.json()
-    }, [])
+    }, [projectPath])
+
+    const lookupEntity = useCallback(async (text: string, type: string): Promise<EntityAggregation> => {
+        const params = new URLSearchParams()
+        params.set('text', text)
+        params.set('entity_type', type)
+        if (projectPath) params.set('project_path', projectPath)
+
+        const response = await authFetch(`${API_BASE}/entities/lookup?${params}`)
+        if (!response.ok) throw new Error('Failed to lookup entity')
+        return response.json()
+    }, [projectPath])
+
+    const getCooccurrences = useCallback(async (
+        text: string,
+        type: string,
+        coLimit: number = 5,
+    ): Promise<Array<{ text: string; type: string; weight: number }>> => {
+        const params = new URLSearchParams()
+        params.set('text', text)
+        params.set('entity_type', type)
+        params.set('limit', String(coLimit))
+        if (projectPath) params.set('project_path', projectPath)
+
+        const response = await authFetch(`${API_BASE}/entities/cooccurrences?${params}`)
+        if (!response.ok) throw new Error('Failed to fetch co-occurrences')
+        return response.json()
+    }, [projectPath])
 
     useEffect(() => {
         fetchEntities()
@@ -96,6 +134,8 @@ export function useEntities(options: UseEntitiesOptions = {}) {
         isLoading,
         error,
         refetch: fetchEntities,
-        searchDocumentsByEntity
+        searchDocumentsByEntity,
+        lookupEntity,
+        getCooccurrences,
     }
 }

@@ -3,7 +3,7 @@ Archon Backend - Entities API Routes
 Provides access to extracted named entities
 """
 from typing import Optional, List
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, tuple_
 
@@ -48,6 +48,7 @@ class EntityTypeSummary(BaseModel):
 def list_entities(
     entity_type: Optional[str] = Query(None, pattern="^(PER|ORG|LOC|MISC|DATE)$"),
     search: Optional[str] = None,
+    project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -62,7 +63,18 @@ def list_entities(
         Entity.type,
         func.sum(Entity.count).label("total_count"),
         func.count(Entity.document_id.distinct()).label("document_count")
-    ).group_by(Entity.text, Entity.type)
+    )
+
+    normalized_project_path = project_path.rstrip("/\\") if project_path else None
+    if normalized_project_path:
+        query = query.join(Document, Document.id == Entity.document_id).filter(
+            or_(
+                Document.file_path == normalized_project_path,
+                Document.file_path.like(f"{normalized_project_path}/%"),
+            )
+        )
+
+    query = query.group_by(Entity.text, Entity.type)
     
     if entity_type:
         query = query.filter(Entity.type == entity_type)
@@ -87,17 +99,32 @@ def list_entities(
 
 
 @router.get("/types", response_model=List[EntityTypeSummary])
-def get_entity_types(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_entity_types(
+    project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Get summary of entities by type.
     
     Returns count of total occurrences and unique entities per type.
     """
-    results = db.query(
+    query = db.query(
         Entity.type,
         func.sum(Entity.count).label("count"),
         func.count(Entity.text.distinct()).label("unique_count")
-    ).group_by(Entity.type).all()
+    )
+
+    normalized_project_path = project_path.rstrip("/\\") if project_path else None
+    if normalized_project_path:
+        query = query.join(Document, Document.id == Entity.document_id).filter(
+            or_(
+                Document.file_path == normalized_project_path,
+                Document.file_path.like(f"{normalized_project_path}/%"),
+            )
+        )
+
+    results = query.group_by(Entity.type).all()
     
     return [
         EntityTypeSummary(
@@ -133,6 +160,8 @@ def get_document_entities(
 def search_by_entity(
     text: str = Query(..., min_length=2),
     entity_type: Optional[str] = Query(None, pattern="^(PER|ORG|LOC|MISC|DATE)$"),
+    project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
+    exact: bool = Query(False, description="If true, matches the entity text exactly (recommended for drill-down)."),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -147,7 +176,21 @@ def search_by_entity(
         Document.file_name,
         Document.file_path,
         Entity.count
-    ).join(Document).filter(Entity.text.ilike(f"%{text}%"))
+    ).join(Document)
+
+    normalized_project_path = project_path.rstrip("/\\") if project_path else None
+    if normalized_project_path:
+        query = query.filter(
+            or_(
+                Document.file_path == normalized_project_path,
+                Document.file_path.like(f"{normalized_project_path}/%"),
+            )
+        )
+
+    if exact:
+        query = query.filter(Entity.text == text)
+    else:
+        query = query.filter(Entity.text.ilike(f"%{text}%"))
     
     if entity_type:
         query = query.filter(Entity.type == entity_type)
@@ -166,6 +209,101 @@ def search_by_entity(
         for r in results
     ]
 
+@router.get("/lookup", response_model=EntityAggregation)
+def lookup_entity(
+    text: str = Query(..., min_length=1, max_length=500),
+    entity_type: str = Query(..., pattern="^(PER|ORG|LOC|MISC|DATE)$"),
+    project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Lookup a single entity aggregation by exact (type, text).
+
+    This endpoint exists to make deep-links reliable (graph -> entities)
+    even when the entity is not in the current top-N list.
+    """
+    query = db.query(
+        Entity.text,
+        Entity.type,
+        func.sum(Entity.count).label("total_count"),
+        func.count(Entity.document_id.distinct()).label("document_count"),
+    )
+
+    normalized_project_path = project_path.rstrip("/\\") if project_path else None
+    if normalized_project_path:
+        query = query.join(Document, Document.id == Entity.document_id).filter(
+            or_(
+                Document.file_path == normalized_project_path,
+                Document.file_path.like(f"{normalized_project_path}/%"),
+            )
+        )
+
+    result = (
+        query.filter(Entity.text == text, Entity.type == entity_type)
+        .group_by(Entity.text, Entity.type)
+        .first()
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    return EntityAggregation(
+        text=result.text,
+        type=result.type,
+        total_count=result.total_count,
+        document_count=result.document_count,
+    )
+
+
+class CoOccurrence(BaseModel):
+    """A co-occurring entity, weighted by shared document count."""
+    text: str
+    type: str
+    weight: int
+
+
+@router.get("/cooccurrences", response_model=List[CoOccurrence])
+def get_cooccurrences(
+    text: str = Query(..., min_length=1, max_length=500),
+    entity_type: str = Query(..., pattern="^(PER|ORG|LOC|MISC|DATE)$"),
+    project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
+    limit: int = Query(5, ge=1, le=25),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return the top co-occurring entities for a given (type, text).
+
+    Weight is the number of distinct shared documents.
+    Designed for the Entities detail panel (faster than fetching the full graph).
+    """
+    normalized_project_path = project_path.rstrip("/\\") if project_path else None
+
+    doc_query = db.query(Entity.document_id).join(Document, Document.id == Entity.document_id)
+    if normalized_project_path:
+        doc_query = doc_query.filter(
+            or_(
+                Document.file_path == normalized_project_path,
+                Document.file_path.like(f"{normalized_project_path}/%"),
+            )
+        )
+    doc_query = doc_query.filter(Entity.text == text, Entity.type == entity_type).distinct()
+
+    # Other entities appearing in those documents (exclude the entity itself).
+    co_query = db.query(
+        Entity.text,
+        Entity.type,
+        func.count(Entity.document_id.distinct()).label("weight"),
+    ).filter(Entity.document_id.in_(doc_query))
+
+    co_query = co_query.filter(or_(Entity.text != text, Entity.type != entity_type))
+    co_query = co_query.group_by(Entity.text, Entity.type)
+    co_query = co_query.order_by(func.count(Entity.document_id.distinct()).desc())
+    co_query = co_query.limit(limit)
+
+    rows = co_query.all()
+    return [CoOccurrence(text=r.text, type=r.type, weight=int(r.weight or 0)) for r in rows]
 
 # ── Graph / Co-occurrence ──────────────────────────────────
 
@@ -198,6 +336,7 @@ def get_entity_graph(
     min_count: int = Query(2, ge=1, description="Minimum mentions to include entity"),
     limit: int = Query(60, ge=10, le=200, description="Max number of nodes"),
     project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
+    focus: Optional[str] = Query(None, min_length=3, max_length=1024, description="Optional focus node id (TYPE:TEXT) to force-include."),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -236,8 +375,49 @@ def get_entity_graph(
     entity_query = entity_query.order_by(func.sum(Entity.count).desc())
     entity_query = entity_query.limit(limit)
 
-    top_entities = entity_query.all()
-    
+    top_entities = list(entity_query.all())
+
+    # If a focus is provided, try to force-include it for reliable deep-links.
+    if focus:
+        focus_type, sep, focus_text = focus.partition(":")
+        focus_type = focus_type.strip().upper()
+        focus_text = focus_text.strip()
+        if sep and focus_text and focus_type in {"PER", "ORG", "LOC", "MISC", "DATE"}:
+            # Respect explicit entity_type filter.
+            if (not entity_type) or (entity_type == focus_type):
+                in_top = any(e.type == focus_type and e.text == focus_text for e in top_entities)
+                if not in_top:
+                    focus_query = db.query(
+                        Entity.text,
+                        Entity.type,
+                        func.sum(Entity.count).label("total_count"),
+                        func.count(Entity.document_id.distinct()).label("document_count"),
+                    )
+                    if normalized_project_path:
+                        focus_query = focus_query.join(Document, Document.id == Entity.document_id).filter(
+                            or_(
+                                Document.file_path == normalized_project_path,
+                                Document.file_path.like(f"{normalized_project_path}/%"),
+                            )
+                        )
+                    focus_row = (
+                        focus_query.filter(Entity.text == focus_text, Entity.type == focus_type)
+                        .group_by(Entity.text, Entity.type)
+                        .first()
+                    )
+                    if focus_row and (focus_row.total_count or 0) >= min_count:
+                        top_entities.append(focus_row)
+                        # Keep within limit by trimming the least-significant entity (but never trim focus).
+                        if len(top_entities) > limit:
+                            def rank_key(r):
+                                # higher document_count then total_count
+                                return (r.document_count or 0, r.total_count or 0)
+
+                            focus_key = (focus_type, focus_text)
+                            non_focus = [r for r in top_entities if (r.type, r.text) != focus_key]
+                            non_focus_sorted = sorted(non_focus, key=lambda r: rank_key(r), reverse=True)
+                            top_entities = non_focus_sorted[: max(0, limit - 1)] + [focus_row]
+
     if not top_entities:
         return GraphResponse(nodes=[], edges=[])
 
@@ -324,6 +504,7 @@ class MergeRequest(BaseModel):
 @router.post("/merge")
 def merge_entities(
     body: MergeRequest,
+    project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -342,26 +523,35 @@ def merge_entities(
         return {"merged": 0}
 
     merged_count = 0
+    normalized_project_path = project_path.rstrip("/\\") if project_path else None
 
     for alias in aliases:
         # Find all rows for this alias
-        alias_rows = (
-            db.query(Entity)
-            .filter(Entity.text == alias, Entity.type == body.entity_type)
-            .all()
-        )
+        alias_query = db.query(Entity).filter(Entity.text == alias, Entity.type == body.entity_type)
+        if normalized_project_path:
+            alias_query = alias_query.join(Document, Document.id == Entity.document_id).filter(
+                or_(
+                    Document.file_path == normalized_project_path,
+                    Document.file_path.like(f"{normalized_project_path}/%"),
+                )
+            )
+        alias_rows = alias_query.all()
 
         for row in alias_rows:
             # Check if canonical already exists in this document
-            existing = (
-                db.query(Entity)
-                .filter(
-                    Entity.text == body.canonical,
-                    Entity.type == body.entity_type,
-                    Entity.document_id == row.document_id,
-                )
-                .first()
+            existing_query = db.query(Entity).filter(
+                Entity.text == body.canonical,
+                Entity.type == body.entity_type,
+                Entity.document_id == row.document_id,
             )
+            if normalized_project_path:
+                existing_query = existing_query.join(Document, Document.id == Entity.document_id).filter(
+                    or_(
+                        Document.file_path == normalized_project_path,
+                        Document.file_path.like(f"{normalized_project_path}/%"),
+                    )
+                )
+            existing = existing_query.first()
 
             if existing:
                 # Merge counts and delete duplicate

@@ -1,6 +1,8 @@
-import { useRef, useEffect, useMemo, useState } from 'react'
+import { useRef, useEffect, useMemo, useState, useCallback } from 'react'
 import * as d3 from 'd3'
 import { cn } from '@/lib/utils'
+import { useTranslation } from '@/contexts/I18nContext'
+import { getEntityLabel, type EntityType as KnownEntityType } from '@/lib/entityTypes'
 
 // ── Types ──────────────────────────────────────────────
 
@@ -26,6 +28,7 @@ interface RelationshipGraphProps {
     onNodeClick?: (node: GraphNode) => void
     className?: string
     communities?: Map<string, number>
+    focusNodeId?: string | null
 }
 
 // ── Color Palette per entity type ─────────────────────
@@ -36,14 +39,6 @@ const TYPE_COLORS: Record<string, string> = {
     LOC: '#fbbf24',   // amber-400
     MISC: '#a78bfa',  // purple-400
     DATE: '#f472b6',  // pink-400
-}
-
-const TYPE_LABELS: Record<string, string> = {
-    PER: 'Personnes',
-    ORG: 'Organisations',
-    LOC: 'Lieux',
-    MISC: 'Divers',
-    DATE: 'Dates',
 }
 
 // Community color palette (10 distinct colors)
@@ -62,7 +57,9 @@ export function RelationshipGraph({
     onNodeClick,
     className,
     communities,
+    focusNodeId,
 }: RelationshipGraphProps) {
+    const { t } = useTranslation()
     const svgRef = useRef<SVGSVGElement>(null)
     const [hoveredNode, setHoveredNode] = useState<string | null>(null)
 
@@ -88,6 +85,14 @@ export function RelationshipGraph({
         const maxWeight = Math.max(...edges.map(e => e.weight), 1)
         return d3.scaleLinear().domain([1, maxWeight]).range([0.5, 4])
     }, [edges])
+
+    const formatTypeLabel = useCallback((type: string): string => {
+        const normalized = (type || '').trim().toUpperCase()
+        if (normalized === 'PER' || normalized === 'ORG' || normalized === 'LOC' || normalized === 'MISC' || normalized === 'DATE') {
+            return getEntityLabel(normalized as KnownEntityType, t)
+        }
+        return normalized || type
+    }, [t])
 
     useEffect(() => {
         if (!svgRef.current || nodes.length === 0) return
@@ -121,13 +126,22 @@ export function RelationshipGraph({
             .force('center', d3.forceCenter(width / 2, height / 2))
             .force('collision', d3.forceCollide<GraphNode>().radius(d => radiusScale(d.total_count) + 4))
 
+        const defaultEdgeStroke = 'hsl(var(--muted-foreground) / 0.15)'
+        const dimEdgeStroke = 'hsl(var(--muted-foreground) / 0.08)'
+
+        const isConnected = (l: any, nodeId: string) => {
+            const s = typeof l.source === 'object' ? l.source.id : l.source
+            const t = typeof l.target === 'object' ? l.target.id : l.target
+            return s === nodeId || t === nodeId
+        }
+
         // Edges
         const link = g.append('g')
             .attr('class', 'links')
             .selectAll('line')
             .data(simEdges)
             .join('line')
-            .attr('stroke', 'hsl(var(--muted-foreground) / 0.15)')
+            .attr('stroke', defaultEdgeStroke)
             .attr('stroke-width', (d: any) => edgeScale(d.weight))
 
         // Node groups
@@ -157,6 +171,7 @@ export function RelationshipGraph({
 
         // Node circles
         node.append('circle')
+            .attr('class', 'node-dot')
             .attr('r', d => radiusScale(d.total_count))
             .attr('fill', d => getNodeColor(d.id, d.type))
             .attr('fill-opacity', 0.7)
@@ -183,36 +198,50 @@ export function RelationshipGraph({
             .attr('font-family', 'ui-sans-serif, system-ui, sans-serif')
             .attr('pointer-events', 'none')
 
+        const baseFocusId = focusNodeId || null
+
+        const applyHighlight = (highlightId: string | null) => {
+            const activeId = highlightId || baseFocusId
+            if (!activeId) {
+                node.select('circle.node-dot')
+                    .attr('fill-opacity', 0.7)
+                    .attr('stroke-opacity', 0.9)
+                    .attr('stroke-width', 1.5)
+                node.select('.glow-ring')
+                    .attr('stroke-width', 0)
+                    .attr('stroke-opacity', 0.0)
+                link
+                    .attr('stroke', defaultEdgeStroke)
+                    .attr('stroke-width', (d: any) => edgeScale(d.weight))
+                return
+            }
+
+            const activeNodeDatum = simNodes.find((n) => n.id === activeId)
+            const activeColor = activeNodeDatum ? getNodeColor(activeNodeDatum.id, activeNodeDatum.type) : 'hsl(var(--primary))'
+
+            node.select('circle.node-dot')
+                .attr('fill-opacity', (d: any) => (d.id === activeId ? 0.88 : 0.18))
+                .attr('stroke-opacity', (d: any) => (d.id === activeId ? 0.95 : 0.25))
+                .attr('stroke-width', (d: any) => (d.id === activeId ? 2.2 : 1.0))
+
+            node.select('.glow-ring')
+                .attr('stroke-width', (d: any) => (d.id === activeId ? 4 : 0))
+                .attr('stroke-opacity', (d: any) => (d.id === activeId ? 0.5 : 0.0))
+
+            link
+                .attr('stroke', (l: any) => (isConnected(l, activeId) ? activeColor : dimEdgeStroke))
+                .attr('stroke-width', (l: any) => (isConnected(l, activeId) ? edgeScale(l.weight) * 2 : edgeScale(l.weight) * 0.25))
+        }
+
         // Interactions
         node
             .on('mouseover', function (_event, d) {
                 setHoveredNode(d.id)
-                d3.select(this).select('.glow-ring')
-                    .transition().duration(200)
-                    .attr('stroke-width', 3)
-                
-                // Highlight connected edges
-                link
-                    .attr('stroke', (l: any) => {
-                        const s = typeof l.source === 'object' ? l.source.id : l.source
-                        const t = typeof l.target === 'object' ? l.target.id : l.target
-                        return (s === d.id || t === d.id) ? (getNodeColor(d.id, d.type)) : 'hsl(var(--muted-foreground) / 0.08)'
-                    })
-                    .attr('stroke-width', (l: any) => {
-                        const s = typeof l.source === 'object' ? l.source.id : l.source
-                        const t = typeof l.target === 'object' ? l.target.id : l.target
-                        return (s === d.id || t === d.id) ? edgeScale(l.weight) * 2 : edgeScale(l.weight) * 0.3
-                    })
+                applyHighlight(d.id)
             })
             .on('mouseout', function () {
                 setHoveredNode(null)
-                d3.select(this).select('.glow-ring')
-                    .transition().duration(200)
-                    .attr('stroke-width', 0)
-
-                link
-                    .attr('stroke', 'hsl(var(--muted-foreground) / 0.15)')
-                    .attr('stroke-width', (d: any) => edgeScale(d.weight))
+                applyHighlight(null)
             })
             .on('click', (event, d) => {
                 event.stopPropagation()
@@ -230,16 +259,37 @@ export function RelationshipGraph({
             node.attr('transform', d => `translate(${d.x},${d.y})`)
         })
 
+        // Apply base highlight and (if requested) auto-focus.
+        applyHighlight(null)
+
+        let focusTimer: number | null = null
+        const zoomToNode = (nodeId: string) => {
+            const target = simNodes.find((n) => n.id === nodeId)
+            if (!target || typeof target.x !== 'number' || typeof target.y !== 'number') return
+            const scale = 1.25
+            const transform = d3.zoomIdentity
+                .translate(width / 2 - target.x * scale, height / 2 - target.y * scale)
+                .scale(scale)
+            svg.transition().duration(450).call(zoom.transform, transform)
+        }
+
+        if (baseFocusId) {
+            focusTimer = window.setTimeout(() => zoomToNode(baseFocusId), 220)
+        }
+
         return () => {
+            if (focusTimer) window.clearTimeout(focusTimer)
             simulation.stop()
         }
-    }, [nodes, edges, width, height, radiusScale, edgeScale, onNodeClick, getNodeColor])
+    }, [nodes, edges, width, height, radiusScale, edgeScale, onNodeClick, getNodeColor, focusNodeId])
 
     // Legend
     const activeTypes = useMemo(() => {
         const types = new Set(nodes.map(n => n.type))
         return Object.entries(TYPE_COLORS).filter(([t]) => types.has(t))
     }, [nodes])
+
+    const activeInfoNodeId = hoveredNode || focusNodeId || null
 
     return (
         <div className={cn("relative", className)}>
@@ -256,14 +306,14 @@ export function RelationshipGraph({
                 {activeTypes.map(([type, color]) => (
                     <div key={type} className="flex items-center gap-2 text-xs">
                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
-                        <span className="text-muted-foreground">{TYPE_LABELS[type] || type}</span>
+                        <span className="text-muted-foreground">{formatTypeLabel(type)}</span>
                     </div>
                 ))}
             </div>
 
             {/* Hovered node info */}
-            {hoveredNode && (() => {
-                const n = nodes.find(n => n.id === hoveredNode)
+            {activeInfoNodeId && (() => {
+                const n = nodes.find(n => n.id === activeInfoNodeId)
                 if (!n) return null
                 return (
                     <div className="absolute bottom-3 left-3 bg-card/90 backdrop-blur-sm rounded-md px-3 py-2 border text-xs">

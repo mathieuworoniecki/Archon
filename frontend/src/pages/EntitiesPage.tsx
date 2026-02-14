@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Users, Hash, Search, FileText, ArrowRight, Network, Loader2, Clock, AlertTriangle, RefreshCw, Merge, Check } from 'lucide-react'
 import { useProject } from '@/contexts/ProjectContext'
 import { useTranslation } from '@/contexts/I18nContext'
@@ -18,8 +18,39 @@ import { API_BASE } from '@/lib/api'
 
 
 export function EntitiesPage() {
-    const [activeType, setActiveType] = useState<EntityType | null>(null)
-    const [searchQuery, setSearchQuery] = useState('')
+    const { selectedProject } = useProject()
+    const { t } = useTranslation()
+    const [searchParams, setSearchParams] = useSearchParams()
+
+    function parseEntityType(value: string | null): EntityType | null {
+        const normalized = (value || '').trim().toUpperCase()
+        if (!normalized) return null
+        if (normalized === 'PER' || normalized === 'ORG' || normalized === 'LOC' || normalized === 'MISC' || normalized === 'DATE') {
+            return normalized as EntityType
+        }
+        return null
+    }
+
+    function buildFocusId(type: string, text: string): string {
+        return `${type}:${text}`
+    }
+
+    function parseFocusId(value: string | null): { type: EntityType; text: string } | null {
+        if (!value) return null
+        const idx = value.indexOf(':')
+        if (idx <= 0) return null
+        const type = parseEntityType(value.slice(0, idx))
+        if (!type) return null
+        const text = value.slice(idx + 1)
+        if (!text) return null
+        return { type, text }
+    }
+
+    const searchParamsKey = searchParams.toString()
+
+    const [activeType, setActiveType] = useState<EntityType | null>(() => parseEntityType(searchParams.get('type')))
+    const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') ?? '')
+    const [focusId, setFocusId] = useState<string | null>(() => searchParams.get('focus'))
     const [selectedEntity, setSelectedEntity] = useState<EntityAggregation | null>(null)
     const [relatedDocs, setRelatedDocs] = useState<EntityDocument[]>([])
     const [isLoadingDocs, setIsLoadingDocs] = useState(false)
@@ -30,11 +61,66 @@ export function EntitiesPage() {
     const isMerging = mergePhase === 'submitting'
     const canMerge = useMemo(() => mergeSelected.size >= 2 && !isMerging, [mergeSelected.size, isMerging])
 
-    const { entities, typeSummary, isLoading, error, refetch, searchDocumentsByEntity } = useEntities({
+    const { entities, typeSummary, isLoading, error, refetch, searchDocumentsByEntity, lookupEntity } = useEntities({
         entityType: activeType || undefined,
         search: searchQuery || undefined,
         limit: 100,
     })
+
+    const updateSearchParams = useCallback((
+        patch: Record<string, string | null | undefined>,
+        opts?: { replace?: boolean }
+    ) => {
+        const next = new URLSearchParams(searchParams)
+        for (const [key, value] of Object.entries(patch)) {
+            const normalized = typeof value === 'string' ? value.trim() : value
+            if (!normalized) next.delete(key)
+            else next.set(key, normalized)
+        }
+        setSearchParams(next, { replace: opts?.replace ?? false })
+    }, [searchParams, setSearchParams])
+
+    // Sync state from URL (back/forward navigation + deep-links)
+    useEffect(() => {
+        const nextType = parseEntityType(searchParams.get('type'))
+        const nextQuery = searchParams.get('q') ?? ''
+        const nextFocus = searchParams.get('focus')
+
+        setActiveType(nextType)
+        setSearchQuery(nextQuery)
+        setFocusId(nextFocus)
+    }, [searchParamsKey])
+
+    // Resolve focused entity into a full aggregation object
+    useEffect(() => {
+        const parsed = parseFocusId(focusId)
+        if (!parsed) {
+            if (focusId) {
+                updateSearchParams({ focus: null }, { replace: true })
+            }
+            setSelectedEntity(null)
+            return
+        }
+
+        const inList = entities.find((e) => e.type === parsed.type && e.text === parsed.text)
+        if (inList) {
+            setSelectedEntity(inList)
+            return
+        }
+
+        let cancelled = false
+        lookupEntity(parsed.text, parsed.type)
+            .then((entity) => {
+                if (cancelled) return
+                setSelectedEntity(entity)
+            })
+            .catch(() => {
+                if (cancelled) return
+                setSelectedEntity(null)
+            })
+
+        return () => { cancelled = true }
+    }, [entities, focusId, lookupEntity, updateSearchParams])
 
     // Fetch related documents when an entity is selected
     useEffect(() => {
@@ -44,14 +130,12 @@ export function EntitiesPage() {
         }
 
         setIsLoadingDocs(true)
-        searchDocumentsByEntity(selectedEntity.text, selectedEntity.type, 50)
+        searchDocumentsByEntity(selectedEntity.text, selectedEntity.type, 50, { exact: true })
             .then(setRelatedDocs)
             .catch(() => { /* handled by hook error state */ })
             .finally(() => setIsLoadingDocs(false))
     }, [selectedEntity, searchDocumentsByEntity])
 
-    const { selectedProject } = useProject()
-    const { t } = useTranslation()
     const totalEntities = typeSummary.reduce((sum, row) => sum + row.unique_count, 0)
     const totalMentions = typeSummary.reduce((sum, row) => sum + row.count, 0)
     const contextLine = t('entities.contextLine')
@@ -76,7 +160,10 @@ export function EntitiesPage() {
                 return
             }
 
-            await authFetch(`${API_BASE}/entities/merge`, {
+            const params = new URLSearchParams()
+            if (selectedProject?.path) params.set('project_path', selectedProject.path)
+
+            const resp = await authFetch(`${API_BASE}/entities/merge?${params}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -85,6 +172,7 @@ export function EntitiesPage() {
                     entity_type: selectedEntities[0].type,
                 }),
             })
+            if (!resp.ok) throw new Error('Merge failed')
 
             toast.success(t('entities.mergeSuccess'))
             setMergeSelected(new Set())
@@ -119,7 +207,10 @@ export function EntitiesPage() {
                         <Button
                             variant={!activeType ? "default" : "outline"}
                             size="sm"
-                            onClick={() => setActiveType(null)}
+                            onClick={() => {
+                                setActiveType(null)
+                                updateSearchParams({ type: null, focus: null }, { replace: true })
+                            }}
                             className="h-8 text-xs"
                         >
                             {t('entities.all')}
@@ -138,7 +229,11 @@ export function EntitiesPage() {
                                     key={type}
                                     variant={activeType === type ? "default" : "outline"}
                                     size="sm"
-                                    onClick={() => setActiveType(activeType === type ? null : type)}
+                                    onClick={() => {
+                                        const nextType = activeType === type ? null : type
+                                        setActiveType(nextType)
+                                        updateSearchParams({ type: nextType ?? null, focus: null }, { replace: true })
+                                    }}
                                     className={cn("h-8 text-xs gap-1.5", activeType !== type && config.color)}
                                 >
                                     <Icon className="h-3.5 w-3.5" />
@@ -156,7 +251,11 @@ export function EntitiesPage() {
                                 <Input
                                     placeholder={t('entities.search')}
                                     value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    onChange={(e) => {
+                                        const nextQuery = e.target.value
+                                        setSearchQuery(nextQuery)
+                                        updateSearchParams({ q: nextQuery || null, focus: null }, { replace: true })
+                                    }}
                                     className="h-8 pl-8 text-sm"
                                 />
                             </div>
@@ -228,7 +327,11 @@ export function EntitiesPage() {
                                                             return next
                                                         })
                                                     } else {
-                                                        setSelectedEntity(isSelected ? null : entity)
+                                                        const nextSelected = isSelected ? null : entity
+                                                        setSelectedEntity(nextSelected)
+                                                        const nextFocus = nextSelected ? buildFocusId(nextSelected.type, nextSelected.text) : null
+                                                        setFocusId(nextFocus)
+                                                        updateSearchParams({ focus: nextFocus }, { replace: false })
                                                     }
                                                 }}
                                                 className={cn(
@@ -311,7 +414,14 @@ export function EntitiesPage() {
                                 entity={selectedEntity}
                                 documents={relatedDocs}
                                 isLoading={isLoadingDocs}
-                                onSelectEntity={(e) => setSelectedEntity(e)}
+                                onFocusEntity={(type, text) => {
+                                    const nextType = parseEntityType(type)
+                                    setActiveType(nextType)
+                                    setSearchQuery('')
+                                    const nextFocus = buildFocusId(type, text)
+                                    setFocusId(nextFocus)
+                                    updateSearchParams({ type: nextType ?? null, q: null, focus: nextFocus }, { replace: false })
+                                }}
                             />
                         ) : (
                             <Card className="h-full flex items-center justify-center">
@@ -337,16 +447,17 @@ function EntityDetailPanel({
     entity,
     documents,
     isLoading,
-    onSelectEntity,
+    onFocusEntity,
 }: {
     entity: EntityAggregation
     documents: EntityDocument[]
     isLoading: boolean
-    onSelectEntity?: (entity: EntityAggregation) => void
+    onFocusEntity?: (type: string, text: string) => void
 }) {
     const config = ENTITY_TYPES[entity.type as EntityType]
     const Icon = config?.icon || Hash
     const { t } = useTranslation()
+    const { selectedProject } = useProject()
 
     // Co-occurrence data
     const [coOccurrences, setCoOccurrences] = useState<{ text: string; type: string; weight: number }[]>([])
@@ -359,27 +470,17 @@ function EntityDetailPanel({
 
         const fetchCoOccurrences = async () => {
             try {
-                const resp = await authFetch(`${API_BASE}/entities/graph?limit=60&min_count=1`, {
+                const params = new URLSearchParams()
+                params.set('text', entity.text)
+                params.set('entity_type', entity.type)
+                params.set('limit', '5')
+                if (selectedProject?.path) params.set('project_path', selectedProject.path)
+
+                const resp = await authFetch(`${API_BASE}/entities/cooccurrences?${params}`, {
                     signal: controller.signal,
                 })
-                if (!resp.ok) throw new Error('Failed to fetch entity graph')
-                const data = await resp.json()
-                const entityKey = `${entity.type}:${entity.text}`
-                const neighbors: Map<string, number> = new Map()
-                for (const edge of data.edges) {
-                    if (edge.source === entityKey) {
-                        neighbors.set(edge.target, (neighbors.get(edge.target) || 0) + edge.weight)
-                    } else if (edge.target === entityKey) {
-                        neighbors.set(edge.source, (neighbors.get(edge.source) || 0) + edge.weight)
-                    }
-                }
-                const sorted = [...neighbors.entries()]
-                    .sort((a, b) => b[1] - a[1])
-                    .slice(0, 5)
-                    .map(([key, weight]) => {
-                        const [type, ...textParts] = key.split(':')
-                        return { text: textParts.join(':'), type, weight }
-                    })
+                if (!resp.ok) throw new Error('Failed to fetch co-occurrences')
+                const sorted = await resp.json()
                 if (coOccurrenceRequestSeqRef.current !== requestSeq) return
                 setCoOccurrences(sorted)
             } catch (err) {
@@ -390,7 +491,7 @@ function EntityDetailPanel({
         }
         fetchCoOccurrences()
         return () => controller.abort()
-    }, [entity.text, entity.type])
+    }, [entity.text, entity.type, selectedProject?.path])
 
     return (
         <Card className="h-full flex flex-col">
@@ -433,7 +534,7 @@ function EntityDetailPanel({
 
                 {/* View in Graph */}
                 <Link
-                    to={`/graph?search=${encodeURIComponent(entity.text)}`}
+                    to={`/graph?focus=${encodeURIComponent(`${entity.type}:${entity.text}`)}`}
                     className="mt-3 flex items-center justify-center gap-1.5 w-full px-3 py-1.5 text-xs font-medium rounded-md bg-purple-500/10 text-purple-400 border border-purple-500/20 hover:bg-purple-500/20 transition-colors"
                 >
                     <Network className="h-3.5 w-3.5" />
@@ -456,7 +557,7 @@ function EntityDetailPanel({
                                             "inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium border cursor-pointer transition-colors hover:bg-accent/60",
                                             coConfig?.bg
                                         )}
-                                        onClick={() => onSelectEntity?.({ text: co.text, type: co.type, total_count: 0, document_count: 0 })}
+                                        onClick={() => onFocusEntity?.(co.type, co.text)}
                                     >
                                         {coConfig && <coConfig.icon className={cn("h-3 w-3", coConfig.color)} />}
                                         <span className="truncate max-w-[120px]">{co.text}</span>
@@ -486,7 +587,7 @@ function EntityDetailPanel({
                         documents.map((doc) => (
                             <Link
                                 key={doc.document_id}
-                                to={`/analysis?q=${encodeURIComponent(doc.file_name)}`}
+                                to={`/?doc=${doc.document_id}`}
                                 className={cn(
                                     "flex items-center gap-2.5 px-3 py-2 rounded-lg",
                                     "hover:bg-accent/60 transition-colors group"

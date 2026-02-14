@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { Document as PDFDocument, Page, pdfjs } from 'react-pdf'
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, FileText, Image as ImageIcon, FileCode, ExternalLink, Home, Users, Building2, MapPin, Hash, ChevronDown, ChevronUp, ShieldAlert, Video, Database, Clock, SkipBack, SkipForward } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, FileText, Image as ImageIcon, FileCode, ExternalLink, Home, Users, Building2, MapPin, Hash, Calendar, ChevronDown, ChevronUp, ShieldAlert, Video, Database, Clock, SkipBack, SkipForward } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -44,6 +45,7 @@ const ENTITY_TYPE_CONFIG: Record<string, { icon: typeof Users; color: string; la
     ORG: { icon: Building2, color: 'text-emerald-400 bg-emerald-400/10', labelKey: 'viewer.entityORG' },
     LOC: { icon: MapPin, color: 'text-amber-400 bg-amber-400/10', labelKey: 'viewer.entityLOC' },
     MISC: { icon: Hash, color: 'text-purple-400 bg-purple-400/10', labelKey: 'viewer.entityMISC' },
+    DATE: { icon: Calendar, color: 'text-pink-400 bg-pink-400/10', labelKey: 'viewer.entityDATE' },
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -189,22 +191,27 @@ function EntityPanel({ documentId }: { documentId: number }) {
                                         </span>
                                     </div>
                                     <div className="flex flex-wrap gap-1">
-                                        {items.sort((a, b) => b.count - a.count).map(entity => (
-                                            <a
-                                                key={entity.id}
-                                                href={`/entities?search=${encodeURIComponent(entity.text)}`}
-                                                className={cn(
-                                                    "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs",
-                                                    "border transition-colors hover:bg-accent",
-                                                    config.color
-                                                )}
-                                            >
-                                                {entity.text}
-                                                {entity.count > 1 && (
-                                                    <span className="text-[9px] opacity-60">×{entity.count}</span>
-                                                )}
-                                            </a>
-                                        ))}
+                                        {items.sort((a, b) => b.count - a.count).map(entity => {
+                                            const params = new URLSearchParams()
+                                            params.set('type', entity.type)
+                                            params.set('focus', `${entity.type}:${entity.text}`)
+                                            return (
+                                                <Link
+                                                    key={entity.id}
+                                                    to={`/entities?${params}`}
+                                                    className={cn(
+                                                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs",
+                                                        "border transition-colors hover:bg-accent",
+                                                        config.color
+                                                    )}
+                                                >
+                                                    {entity.text}
+                                                    {entity.count > 1 && (
+                                                        <span className="text-[9px] opacity-60">×{entity.count}</span>
+                                                    )}
+                                                </Link>
+                                            )
+                                        })}
                                     </div>
                                 </div>
                             )
