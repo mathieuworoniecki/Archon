@@ -629,6 +629,7 @@
     "yes": "Yes",
     "no": "No",
     "documents": "documents",
+    "page": "page",
     "results": "results",
     "retry": "Retry",
     "loadMoreError": "Failed to load more"

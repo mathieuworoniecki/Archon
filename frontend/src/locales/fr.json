@@ -629,6 +629,7 @@
     "yes": "Oui",
     "no": "Non",
     "documents": "documents",
+    "page": "page",
     "results": "résultats",
     "retry": "Réessayer",
     "loadMoreError": "Erreur lors du chargement"

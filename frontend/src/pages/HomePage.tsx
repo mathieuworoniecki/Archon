@@ -2,8 +2,10 @@ import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { ResultList } from '@/components/search/ResultList'
+import { ResultGrid } from '@/components/search/ResultGrid'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Slider } from '@/components/ui/slider'
 import { DocumentViewer } from '@/components/viewer/DocumentViewer'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { useSearch } from '@/hooks/useSearch'
@@ -27,6 +29,10 @@ import {
     Filter,
     Sparkles,
     Zap,
+    LayoutGrid,
+    Columns2,
+    ZoomOut,
+    ZoomIn,
 } from 'lucide-react'
 import {
     DropdownMenu,
@@ -36,8 +42,12 @@ import {
 } from '@/components/ui/dropdown-menu'
 
 type QueryMode = 'filename' | 'content'
+type DocumentsLayout = 'split' | 'grid'
 
 const RECENT_SEARCHES_KEY = 'archon_recent_searches'
+const DOCUMENTS_LAYOUT_KEY = 'archon_documents_layout'
+const GRID_THUMB_SIZE_KEY = 'archon_grid_thumb_size'
+const SEARCH_PAGE_SIZE_KEY = 'archon_search_page_size'
 
 export function HomePage() {
     const navigate = useNavigate()
@@ -87,6 +97,36 @@ export function HomePage() {
 
     const [queryMode, setQueryMode] = useState<QueryMode>(() => (queryParam ? 'content' : 'filename'))
     const [queryInput, setQueryInput] = useState(queryParam)
+    const [documentsLayout, setDocumentsLayout] = useState<DocumentsLayout>(() => {
+        try {
+            const saved = localStorage.getItem(DOCUMENTS_LAYOUT_KEY)
+            if (saved === 'grid' || saved === 'split') return saved
+        } catch {
+            // ignore
+        }
+        if (typeof window !== 'undefined' && window.matchMedia) {
+            if (window.matchMedia('(max-width: 1024px)').matches) return 'grid'
+        }
+        return 'split'
+    })
+    const [gridThumbnailSize, setGridThumbnailSize] = useState<number>(() => {
+        try {
+            const saved = Number(localStorage.getItem(GRID_THUMB_SIZE_KEY))
+            if (Number.isFinite(saved) && saved >= 80 && saved <= 300) return saved
+        } catch {
+            // ignore
+        }
+        return 160
+    })
+    const [searchPageSize, setSearchPageSize] = useState<number>(() => {
+        try {
+            const saved = Number(localStorage.getItem(SEARCH_PAGE_SIZE_KEY))
+            if (Number.isFinite(saved) && saved >= 20 && saved <= 100) return saved
+        } catch {
+            // ignore
+        }
+        return 50
+    })
     const [semanticWeight, setSemanticWeight] = useState(0.5)
     const [selectedFileTypes, setSelectedFileTypes] = useState<FileType[]>(initialTypes)
     const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null)
@@ -112,7 +152,7 @@ export function HomePage() {
         setSearchParams(next, { replace: true })
     }, [searchParams, setSearchParams])
 
-    const runContentSearch = useCallback((rawQuery: string, weight = semanticWeight, types = selectedFileTypes) => {
+    const runContentSearch = useCallback((rawQuery: string, weight = semanticWeight, types = selectedFileTypes, limit = searchPageSize) => {
         const q = rawQuery.trim()
         if (!q) {
             clearResults()
@@ -127,6 +167,7 @@ export function HomePage() {
             semantic_weight: weight,
             project_path: selectedProject?.path,
             file_types: types.length ? types : undefined,
+            limit,
         })
         setSelectedResult(null)
 
@@ -144,8 +185,33 @@ export function HomePage() {
         selectedProject?.path,
         selectedFileTypes,
         semanticWeight,
+        searchPageSize,
         setSearchParams,
     ])
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(DOCUMENTS_LAYOUT_KEY, documentsLayout)
+        } catch {
+            // ignore
+        }
+    }, [documentsLayout])
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(GRID_THUMB_SIZE_KEY, String(gridThumbnailSize))
+        } catch {
+            // ignore
+        }
+    }, [gridThumbnailSize])
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(SEARCH_PAGE_SIZE_KEY, String(searchPageSize))
+        } catch {
+            // ignore
+        }
+    }, [searchPageSize])
 
     // Sync URL query back into UI state.
     useEffect(() => {
@@ -229,6 +295,7 @@ export function HomePage() {
             semantic_weight: semanticWeight,
             project_path: selectedProject?.path,
             file_types: selectedFileTypes.length ? selectedFileTypes : undefined,
+            limit: searchPageSize,
         })
         setSelectedResult(null)
     }, [
@@ -239,11 +306,20 @@ export function HomePage() {
         semanticWeight,
         selectedFileTypes,
         selectedProject?.path,
+        searchPageSize,
     ])
 
     const handleSelectResult = useCallback((result: SearchResult) => {
         setSelectedResult(result)
     }, [])
+
+    const openResultInSplitView = useCallback((result: SearchResult) => {
+        setSelectedResult(result)
+        setDocumentsLayout('split')
+        const next = new URLSearchParams(searchParams)
+        next.set('doc', String(result.document_id))
+        setSearchParams(next, { replace: true })
+    }, [searchParams, setSearchParams])
 
     const handleStartScan = useCallback((projectPath?: string) => {
         if (projectPath) {
@@ -491,9 +567,40 @@ export function HomePage() {
         return <EmptyState onStartScan={handleStartScan} />
     }
 
+    const PAGE_SIZE_OPTIONS = usesBrowseDataset ? [50, 100, 200] : [20, 50, 100]
+    const currentPageSize = usesBrowseDataset ? (browse.filters.limit ?? 50) : searchPageSize
+
+    const handlePageSizeChange = useCallback((nextSize: number) => {
+        const size = Math.max(1, nextSize)
+        if (usesBrowseDataset) {
+            browse.updateFilters({ limit: Math.min(200, size) })
+            return
+        }
+        setSearchPageSize(Math.min(100, size))
+        if (queryMode === 'content') {
+            const activeQuery = (queryParam || lastQuery).trim()
+            if (activeQuery) {
+                runContentSearch(activeQuery, semanticWeight, selectedFileTypes, Math.min(100, size))
+            }
+        }
+    }, [
+        browse.updateFilters,
+        lastQuery,
+        queryMode,
+        queryParam,
+        runContentSearch,
+        semanticWeight,
+        selectedFileTypes,
+        usesBrowseDataset,
+    ])
+
     return (
-        <PanelGroup direction="horizontal" className="h-full">
-            <Panel defaultSize={50} minSize={35} maxSize={65}>
+        <PanelGroup key={documentsLayout} direction="horizontal" className="h-full">
+            <Panel
+                defaultSize={documentsLayout === 'grid' ? 100 : 50}
+                minSize={35}
+                maxSize={documentsLayout === 'grid' ? 100 : 65}
+            >
                 <PanelGroup direction="horizontal" className="h-full">
                     <Panel defaultSize={34} minSize={24} maxSize={45}>
                         <div className="h-full flex flex-col border-r bg-card/20">
@@ -736,31 +843,110 @@ export function HomePage() {
                     <Panel defaultSize={66} minSize={45}>
                         <div className="h-full flex flex-col">
                             <div className="shrink-0 px-3 py-2 border-b bg-card/30 text-xs text-muted-foreground flex items-center justify-between gap-3">
-                                <span>
-                                    {usesBrowseDataset
-                                        ? `${browse.total.toLocaleString()} ${t('common.documents')}`
-                                        : `${totalResults.toLocaleString()} ${t('stats.searchResults')} · “${activeContentQuery}”`
-                                    }
-                                </span>
-                                {usesBrowseDataset && hasActiveFilters && (
-                                    <span className="text-[11px] text-primary">{t('browse.activeFilters').replace('{count}', String(activeFilterCount))}</span>
-                                )}
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <span className="truncate">
+                                        {usesBrowseDataset
+                                            ? `${browse.total.toLocaleString()} ${t('common.documents')}`
+                                            : `${totalResults.toLocaleString()} ${t('stats.searchResults')} · “${activeContentQuery}”`
+                                        }
+                                    </span>
+                                    {usesBrowseDataset && hasActiveFilters && (
+                                        <span className="text-[11px] text-primary whitespace-nowrap">
+                                            {t('browse.activeFilters').replace('{count}', String(activeFilterCount))}
+                                        </span>
+                                    )}
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                    {documentsLayout === 'grid' && (
+                                        <>
+                                            <div className="hidden lg:flex items-center gap-2 w-40">
+                                                <ZoomOut className="h-3.5 w-3.5 text-muted-foreground" />
+                                                <Slider
+                                                    value={[gridThumbnailSize]}
+                                                    onValueChange={([v]: number[]) => setGridThumbnailSize(v)}
+                                                    min={80}
+                                                    max={300}
+                                                    step={20}
+                                                    className="w-24"
+                                                />
+                                                <ZoomIn className="h-3.5 w-3.5 text-muted-foreground" />
+                                            </div>
+
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]">
+                                                        {currentPageSize} / {t('common.page')}
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end">
+                                                    {PAGE_SIZE_OPTIONS.map((size) => (
+                                                        <DropdownMenuItem
+                                                            key={size}
+                                                            onClick={() => handlePageSizeChange(size)}
+                                                            className={cn(size === currentPageSize && 'bg-accent')}
+                                                        >
+                                                            {size} / {t('common.page')}
+                                                        </DropdownMenuItem>
+                                                    ))}
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
+                                        </>
+                                    )}
+
+                                    <div className="flex items-center border rounded-md bg-muted/20 p-0.5">
+                                        <Button
+                                            variant={documentsLayout === 'grid' ? 'default' : 'ghost'}
+                                            size="sm"
+                                            className="h-7 px-2"
+                                            onClick={() => setDocumentsLayout('grid')}
+                                            title="Vue grille"
+                                        >
+                                            <LayoutGrid className="h-3.5 w-3.5" />
+                                        </Button>
+                                        <Button
+                                            variant={documentsLayout === 'split' ? 'default' : 'ghost'}
+                                            size="sm"
+                                            className="h-7 px-2"
+                                            onClick={() => setDocumentsLayout('split')}
+                                            title="Vue details"
+                                        >
+                                            <Columns2 className="h-3.5 w-3.5" />
+                                        </Button>
+                                    </div>
+                                </div>
                             </div>
 
                             <div className="flex-1 overflow-hidden">
-                                <ResultList
-                                    results={listResults}
-                                    selectedId={selectedResult?.document_id ?? null}
-                                    onSelect={handleSelectResult}
-                                    totalResults={listTotalResults}
-                                    processingTime={listProcessingTime}
-                                    isLoading={listIsLoading}
-                                    mode={listMode}
-                                    hasActiveFilters={hasActiveFilters}
-                                    onLoadMore={!usesBrowseDataset ? loadMore : undefined}
-                                    hasMore={!usesBrowseDataset ? hasMore : false}
-                                    isLoadingMore={!usesBrowseDataset ? isLoadingMore : false}
-                                />
+                                {documentsLayout === 'grid' ? (
+                                    <ResultGrid
+                                        results={listResults}
+                                        selectedId={selectedResult?.document_id ?? null}
+                                        onSelect={openResultInSplitView}
+                                        totalResults={listTotalResults}
+                                        isLoading={listIsLoading}
+                                        mode={listMode}
+                                        hasActiveFilters={hasActiveFilters}
+                                        thumbnailSize={gridThumbnailSize}
+                                        onLoadMore={!usesBrowseDataset ? loadMore : undefined}
+                                        hasMore={!usesBrowseDataset ? hasMore : false}
+                                        isLoadingMore={!usesBrowseDataset ? isLoadingMore : false}
+                                    />
+                                ) : (
+                                    <ResultList
+                                        results={listResults}
+                                        selectedId={selectedResult?.document_id ?? null}
+                                        onSelect={handleSelectResult}
+                                        totalResults={listTotalResults}
+                                        processingTime={listProcessingTime}
+                                        isLoading={listIsLoading}
+                                        mode={listMode}
+                                        hasActiveFilters={hasActiveFilters}
+                                        onLoadMore={!usesBrowseDataset ? loadMore : undefined}
+                                        hasMore={!usesBrowseDataset ? hasMore : false}
+                                        isLoadingMore={!usesBrowseDataset ? isLoadingMore : false}
+                                    />
+                                )}
                             </div>
 
                             {usesBrowseDataset && browse.total > currentLimit && (
@@ -795,20 +981,24 @@ export function HomePage() {
                 </PanelGroup>
             </Panel>
 
-            <PanelResizeHandle className="w-1 bg-border hover:bg-primary transition-colors" />
+            {documentsLayout === 'split' && (
+                <>
+                    <PanelResizeHandle className="w-1 bg-border hover:bg-primary transition-colors" />
 
-            <Panel defaultSize={50} minSize={35}>
-                <div className="h-full bg-card/20">
-                    <DocumentViewer
-                        documentId={selectedDocumentId}
-                        searchQuery={isContentSearchActive ? activeContentQuery : undefined}
-                        onNavigatePrevious={navigateToPreviousDocument}
-                        onNavigateNext={navigateToNextDocument}
-                        canNavigatePrevious={canNavigatePrevious}
-                        canNavigateNext={canNavigateNext}
-                    />
-                </div>
-            </Panel>
+                    <Panel defaultSize={50} minSize={35}>
+                        <div className="h-full bg-card/20">
+                            <DocumentViewer
+                                documentId={selectedDocumentId}
+                                searchQuery={isContentSearchActive ? activeContentQuery : undefined}
+                                onNavigatePrevious={navigateToPreviousDocument}
+                                onNavigateNext={navigateToNextDocument}
+                                canNavigatePrevious={canNavigatePrevious}
+                                canNavigateNext={canNavigateNext}
+                            />
+                        </div>
+                    </Panel>
+                </>
+            )}
         </PanelGroup>
     )
 }
