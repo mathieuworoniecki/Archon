@@ -165,6 +165,7 @@ La qualite RAG (grounding, retrieval, citations, evaluation) est pilotee en mode
 - `docs/rag_status_board.md` (suivi)
 - `docs/rag_decision_log.md` (decisions)
 - `docs/deep_dive_AnkitNayak-eth_EpsteinFiles-RAG.md` (deep dive externe: pratiques chunking/MMR/prompt)
+- `docs/ux_product_review.md` (revue produit/UX: parcours + priorites)
 
 ## 8. Fichiers et dossiers importants
 
