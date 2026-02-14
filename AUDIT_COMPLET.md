@@ -2715,8 +2715,9 @@ Date de mise a jour: 2026-02-13 (batch multi-agents)
 
 ### Termine - Batch 4 (agents paralleles)
 
-1. Raccourcis clavier etendus (partiel):
+1. Raccourcis clavier etendus:
    - `frontend/src/router.tsx`: ajout `N` (scans), `R` (scans/reprise rapide), `F` (favoris), aide `?` mise a jour.
+   - `frontend/src/pages/documents/HomePage.tsx` + `frontend/src/components/viewer/DocumentViewer.tsx`: navigation documents `←/→` contextualisee au viewer (incluant pagination).
 2. Resume post-scan actionnable:
    - `frontend/src/pages/ScansPage.tsx`: bloc de synthese en fin de scan (fichiers/erreurs/duree/top types) + actions rapides.
    - `frontend/src/locales/en.json`, `frontend/src/locales/fr.json`: nouvelles cles `scans.postScan*`.
@@ -2752,9 +2753,8 @@ Date de mise a jour: 2026-02-13 (batch multi-agents)
 
 ### 9. Raccourcis Clavier sous-Utilisés
 
-**État** : Partiellement corrigé.
-**Maintenant** : `Ctrl+K`, `?`, `N`, `R`, `F`, `G`, `T` sont actifs globalement.
-**Reste à faire** : navigation document `←/→` contextualisée au viewer.
+**État** : Corrigé.
+**Maintenant** : `Ctrl+K`, `?`, `N`, `R`, `F`, `G`, `T` et `←/→` sont actifs globalement (navigation documents contextualisée au viewer).
 | Raccourci | Action |
 |-----------|--------|
 | `Ctrl+K` | Focus recherche (standard) |
@@ -2863,7 +2863,7 @@ Premier lancement → tour guidé avec 3-4 étapes : "Voici vos projets", "Lance
 | 5   | Types consolidés        | ⭐⭐⭐     | 🔧 Faible   | 🏆    | fait |
 | 4   | SSE Auto-Reconnect      | ⭐⭐⭐⭐   | 🔧🔧 Moyen  | ⭐⭐  | fait |
 | 13  | Résumé Post-Scan        | ⭐⭐⭐⭐   | 🔧🔧 Moyen  | ⭐⭐  | fait |
-| 9   | Raccourcis Clavier      | ⭐⭐⭐     | 🔧 Faible   | ⭐⭐  | partiel |
+| 9   | Raccourcis Clavier      | ⭐⭐⭐     | 🔧 Faible   | ⭐⭐  | fait |
 | 10  | Loading Skeletons       | ⭐⭐⭐     | 🔧🔧 Moyen  | ⭐    | partiel |
 | 7   | Infinite Scroll Gallery | ⭐⭐⭐     | 🔧 Faible   | ⭐⭐  | fait |
 | 11  | Command Palette         | ⭐⭐⭐⭐   | 🔧🔧🔧 Haut | ⭐    | partiel |
@@ -2888,7 +2888,7 @@ Premier lancement → tour guidé avec 3-4 étapes : "Voici vos projets", "Lance
 
 6. **SSE auto-reconnect** avec retry UI — `fait`
 7. **Résumé post-scan** avec actions — `fait`
-8. **Raccourcis clavier** étendus — `partiel`
+8. **Raccourcis clavier** étendus — `fait`
 9. **Timeline → navigation vers cockpit** — `fait`
 10. **Health indicator** sidebar — `fait`
 

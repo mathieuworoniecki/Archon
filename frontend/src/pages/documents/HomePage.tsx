@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { ResultList } from '@/components/search/ResultList'
@@ -44,6 +44,10 @@ import {
 
 type QueryMode = 'filename' | 'content'
 type DocumentsLayout = 'split' | 'grid'
+
+type PendingViewerSelection =
+    | { kind: 'index'; index: number }
+    | { kind: 'edge'; edge: 'first' | 'last' }
 
 const RECENT_SEARCHES_KEY = 'archon_recent_searches'
 const DOCUMENTS_LAYOUT_KEY = 'archon_documents_layout'
@@ -100,6 +104,8 @@ export function HomePage() {
     const [queryMode, setQueryMode] = useState<QueryMode>(() => (queryParam ? 'content' : 'filename'))
     const [queryInput, setQueryInput] = useState(queryParam)
     const [documentsLayout, setDocumentsLayout] = useState<DocumentsLayout>(() => {
+        // If the URL points to a specific document, assume the user wants the viewer open.
+        if (docParam) return 'split'
         try {
             const saved = localStorage.getItem(DOCUMENTS_LAYOUT_KEY)
             if (saved === 'grid' || saved === 'split') return saved
@@ -141,6 +147,7 @@ export function HomePage() {
     const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null)
     const [batchScanStatus, setBatchScanStatus] = useState<'idle' | 'loading' | 'triggered' | 'complete'>('idle')
     const [fileTypeCounts, setFileTypeCounts] = useState<Record<string, number>>({})
+    const pendingViewerSelectionRef = useRef<PendingViewerSelection | null>(null)
 
     const saveRecentSearch = useCallback((query: string) => {
         const normalized = query.trim()
@@ -337,6 +344,21 @@ export function HomePage() {
         next.set('doc', String(result.document_id))
         setSearchParams(next, { replace: true })
     }, [searchParams, setSearchParams])
+
+    const handleLayoutGrid = useCallback(() => {
+        setDocumentsLayout('grid')
+        const next = new URLSearchParams(searchParams)
+        next.delete('doc')
+        setSearchParams(next, { replace: true })
+    }, [searchParams, setSearchParams])
+
+    const handleLayoutSplit = useCallback(() => {
+        setDocumentsLayout('split')
+        if (!selectedResult) return
+        const next = new URLSearchParams(searchParams)
+        next.set('doc', String(selectedResult.document_id))
+        setSearchParams(next, { replace: true })
+    }, [searchParams, selectedResult, setSearchParams])
 
     const handleStartScan = useCallback((projectPath?: string) => {
         if (projectPath) {
@@ -585,20 +607,97 @@ export function HomePage() {
         : -1
     const canNavigatePrevious = currentViewerIndex > 0
     const canNavigateNext = currentViewerIndex >= 0 && currentViewerIndex < currentViewerResults.length - 1
+    const canNavigatePreviousForViewer =
+        canNavigatePrevious || (usesBrowseDataset && currentViewerIndex === 0 && currentSkip > 0)
+    const canNavigateNextForViewer =
+        canNavigateNext
+        || (currentViewerIndex >= 0 && (
+            usesBrowseDataset
+                ? (currentViewerIndex === currentViewerResults.length - 1 && currentSkip + currentLimit < browse.total)
+                : (currentViewerIndex === currentViewerResults.length - 1 && hasMore)
+        ))
 
     const navigateToPreviousDocument = useCallback(() => {
-        if (!canNavigatePrevious) return
-        setSelectedResult(currentViewerResults[currentViewerIndex - 1] ?? null)
-    }, [canNavigatePrevious, currentViewerIndex, currentViewerResults])
+        if (currentViewerIndex < 0) return
+
+        if (canNavigatePrevious) {
+            setSelectedResult(currentViewerResults[currentViewerIndex - 1] ?? null)
+            return
+        }
+
+        if (pendingViewerSelectionRef.current) return
+        if (!usesBrowseDataset) return
+        if (currentSkip <= 0) return
+
+        pendingViewerSelectionRef.current = { kind: 'edge', edge: 'last' }
+        browse.prevPage()
+    }, [
+        browse.prevPage,
+        canNavigatePrevious,
+        currentSkip,
+        currentViewerIndex,
+        currentViewerResults,
+        usesBrowseDataset,
+    ])
 
     const navigateToNextDocument = useCallback(() => {
-        if (!canNavigateNext) return
-        setSelectedResult(currentViewerResults[currentViewerIndex + 1] ?? null)
-    }, [canNavigateNext, currentViewerIndex, currentViewerResults])
+        if (currentViewerIndex < 0) return
+
+        if (canNavigateNext) {
+            setSelectedResult(currentViewerResults[currentViewerIndex + 1] ?? null)
+            return
+        }
+
+        if (pendingViewerSelectionRef.current) return
+
+        if (usesBrowseDataset) {
+            if (currentSkip + currentLimit >= browse.total) return
+            pendingViewerSelectionRef.current = { kind: 'edge', edge: 'first' }
+            browse.nextPage()
+            return
+        }
+
+        if (!hasMore) return
+        pendingViewerSelectionRef.current = { kind: 'index', index: currentViewerIndex + 1 }
+        loadMore()
+    }, [
+        browse.nextPage,
+        browse.total,
+        canNavigateNext,
+        currentLimit,
+        currentSkip,
+        currentViewerIndex,
+        currentViewerResults,
+        hasMore,
+        loadMore,
+        usesBrowseDataset,
+    ])
 
     useEffect(() => {
         if (listResults.length === 0) {
             if (selectedResult) setSelectedResult(null)
+            return
+        }
+
+        const pending = pendingViewerSelectionRef.current
+        if (pending) {
+            if (pending.kind === 'edge') {
+                pendingViewerSelectionRef.current = null
+                setSelectedResult(pending.edge === 'first' ? listResults[0] : listResults[listResults.length - 1])
+                return
+            }
+
+            // Wait for pagination to append more results, then select the requested index.
+            if (pending.index >= 0 && pending.index < listResults.length) {
+                pendingViewerSelectionRef.current = null
+                setSelectedResult(listResults[pending.index])
+                return
+            }
+
+            if (!isLoadingMore) {
+                // Nothing got appended (or request failed). Clear pending so the user can retry.
+                pendingViewerSelectionRef.current = null
+            }
             return
         }
 
@@ -623,7 +722,26 @@ export function HomePage() {
         if (!listResults.some((result) => result.document_id === selectedResult.document_id)) {
             setSelectedResult(listResults[0])
         }
-    }, [listResults, requestedDocId, selectedResult])
+    }, [isLoadingMore, listResults, requestedDocId, selectedResult])
+
+    // If the URL targets a specific document while we're in grid mode, automatically open the viewer.
+    useEffect(() => {
+        if (!requestedDocId) return
+        if (documentsLayout === 'split') return
+        setDocumentsLayout('split')
+    }, [documentsLayout, requestedDocId])
+
+    // Keep `?doc=` in sync with the visible viewer document when split mode is active.
+    useEffect(() => {
+        if (documentsLayout !== 'split') return
+        if (!selectedDocumentId) return
+        const desired = String(selectedDocumentId)
+        const current = searchParams.get('doc')
+        if (current === desired) return
+        const next = new URLSearchParams(searchParams)
+        next.set('doc', desired)
+        setSearchParams(next, { replace: true })
+    }, [documentsLayout, searchParams, selectedDocumentId, setSearchParams])
 
     // Support deep-linking from gallery (`/?doc=123`) even if the doc is outside current page slice.
     useEffect(() => {
@@ -1016,7 +1134,7 @@ export function HomePage() {
                                             variant={documentsLayout === 'grid' ? 'default' : 'ghost'}
                                             size="sm"
                                             className="h-7 px-2"
-                                            onClick={() => setDocumentsLayout('grid')}
+                                            onClick={handleLayoutGrid}
                                             title="Vue grille"
                                         >
                                             <LayoutGrid className="h-3.5 w-3.5" />
@@ -1025,7 +1143,7 @@ export function HomePage() {
                                             variant={documentsLayout === 'split' ? 'default' : 'ghost'}
                                             size="sm"
                                             className="h-7 px-2"
-                                            onClick={() => setDocumentsLayout('split')}
+                                            onClick={handleLayoutSplit}
                                             title="Vue details"
                                         >
                                             <Columns2 className="h-3.5 w-3.5" />
@@ -1130,8 +1248,8 @@ export function HomePage() {
                                 searchQuery={isContentSearchActive ? activeContentQuery : undefined}
                                 onNavigatePrevious={navigateToPreviousDocument}
                                 onNavigateNext={navigateToNextDocument}
-                                canNavigatePrevious={canNavigatePrevious}
-                                canNavigateNext={canNavigateNext}
+                                canNavigatePrevious={canNavigatePreviousForViewer}
+                                canNavigateNext={canNavigateNextForViewer}
                             />
                         </div>
                     </Panel>
