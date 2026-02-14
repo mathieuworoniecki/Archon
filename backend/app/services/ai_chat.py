@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 from ..config import get_settings
 from .qdrant import get_qdrant_service
 from .embeddings import get_embeddings_service
+from .reranker import get_reranker_service
 
 settings = get_settings()
 
@@ -156,13 +157,18 @@ Citation format: [Document: file_name]"""
         Retrieve relevant document snippets using semantic search.
         """
         try:
+            reranker = get_reranker_service()
+            retrieval_limit = limit
+            if reranker.is_enabled():
+                retrieval_limit = max(retrieval_limit, reranker.top_n())
+
             # Get query embedding
             query_embedding = self.embeddings_service.get_query_embedding(query)
             
             # Search in Qdrant
             results = self.qdrant_service.search(
                 query_embedding=query_embedding,
-                limit=limit,
+                limit=retrieval_limit,
                 use_mmr=True,
                 mmr_lambda=0.68,
                 candidate_multiplier=18,
@@ -177,8 +183,23 @@ Citation format: [Document: file_name]"""
                     snippet=result.get("chunk_text", ""),
                     score=result.get("score", 0.0)
                 ))
-            
-            return contexts
+
+            if reranker.is_enabled() and len(contexts) > 1:
+                contexts, scores = reranker.rerank_items(
+                    query,
+                    contexts,
+                    get_id=lambda ctx: int(ctx.doc_id),
+                    get_text=lambda ctx: f"{ctx.file_name}\n{ctx.snippet}",
+                )
+                if scores:
+                    for ctx in contexts:
+                        if ctx.doc_id in scores:
+                            ctx.score = scores[ctx.doc_id]
+
+                out_k = max(1, min(limit, reranker.top_k_out() or limit))
+                return contexts[:out_k]
+
+            return contexts[:limit]
         except Exception as e:
             logger.error("Context retrieval error: %s", e)
             return []

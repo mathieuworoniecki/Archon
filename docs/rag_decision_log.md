@@ -33,6 +33,23 @@ Impacts:
 Reversibilité:
 - Totale (on peut réactiver l’OCR media plus tôt via évolution de pipeline si besoin).
 
+## DEC-003 - Reranker P0: Gemini “JSON scoring” (single call) derrière feature flag
+Date: 2026-02-14
+Contexte:
+- On veut un reranker cross-encoder-style pour augmenter la précision top-k (search + chat) sans big-bang.
+- Contrainte: garder un fallback stable (pas de regression) et pouvoir couper rapidement en cas d’impact latence/coût.
+Options:
+1. Reranker local (transformers/FlagEmbedding) dans les workers/API.
+2. Reranker SaaS (Cohere/Jina/Voyage) via clé séparée.
+3. Reranker Gemini (même clé que le reste) en 1 appel: scoring JSON de `query + passages`.
+Décision:
+- Option 3 pour P0: implémentation rapide et qualité forte, sans nouvelle dépendance lourde ni clé supplémentaire.
+Impacts:
+- Qualité retrieval améliorée quand activé.
+- Coût/latence supplémentaires, contrôlés via `RAG_RERANK_ENABLED`, `RAG_RERANK_TOP_N`, `RAG_RERANK_TOP_K_OUT`.
+Reversibilité:
+- Totale: flag désactivable (env) + fallback au ranking existant.
+
 ## Template
 Date: YYYY-MM-DD
 Contexte:

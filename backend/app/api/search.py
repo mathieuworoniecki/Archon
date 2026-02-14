@@ -16,6 +16,7 @@ from ..schemas import SearchQuery, SearchResult, SearchResponse, SearchHighlight
 from ..services.meilisearch import get_meilisearch_service
 from ..services.qdrant import get_qdrant_service
 from ..services.embeddings import get_embeddings_service
+from ..services.reranker import get_reranker_service
 from ..config import get_settings
 from ..utils.auth import get_current_user
 
@@ -255,6 +256,13 @@ async def hybrid_search(
         fused_results = [r for r in fused_results if r["document_id"] in valid_ids]
     
     # Apply pagination
+    reranker = get_reranker_service()
+    fused_results, _ = reranker.rerank_items(
+        query.query,
+        fused_results,
+        get_id=lambda row: int(row.get("document_id", 0)),
+        get_text=lambda row: f'{row.get("file_name", "")}\n{(row.get("snippet") or "")}',
+    )
     paginated_results = fused_results[query.offset:query.offset + query.limit]
     
     # Convert to response model

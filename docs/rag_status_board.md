@@ -14,9 +14,9 @@ Mise à jour: 2026-02-14
 | Ticket    | Statut | Owner | Sprint | Bloqué par | Notes |
 |-----------|--------|-------|--------|------------|-------|
 | RAG-P0-01 | done   | codex | S1     | -          | Skip placeholders `[IMAGE]/[VIDEO] OCR…` (NER+embeddings), purge Qdrant si déjà indexé, nettoyage `qdrant_ids` + tests |
-| RAG-P0-02 | todo   | TBD   | S2     | RAG-P0-01  | Service reranker + flags |
-| RAG-P0-03 | todo   | TBD   | S2     | RAG-P0-02  | Reranking dans `/api/search` |
-| RAG-P0-04 | todo   | TBD   | S3     | RAG-P0-02  | Reranking chat |
+| RAG-P0-02 | done   | codex | S2     | RAG-P0-01  | `backend/app/services/reranker.py` + flags `RAG_RERANK_*` (Gemini JSON scorer, hot-disable via env) |
+| RAG-P0-03 | done   | codex | S2     | RAG-P0-02  | Search: `retrieve -> fuse -> rerank -> paginate` (`backend/app/api/search.py`) |
+| RAG-P0-04 | done   | codex | S3     | RAG-P0-02  | Chat: retrieve more -> rerank -> top-k (`backend/app/services/ai_chat.py`) |
 | RAG-P0-05 | todo   | TBD   | S1     | -          | Dataset QA initial |
 | RAG-P0-06 | todo   | TBD   | S3     | RAG-P0-05  | Pipeline QA CI |
 | RAG-P1-01 | todo   | TBD   | S4     | RAG-P0-*   | Pilote Docling |

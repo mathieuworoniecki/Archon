@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     # Gemini AI
     gemini_api_key: str = ""
     embedding_model: str = "models/gemini-embedding-001"
+
+    # RAG reranker (feature flagged)
+    rag_rerank_enabled: bool = False
+    rag_rerank_top_n: int = 50
+    rag_rerank_top_k_out: int = 10
+    rag_rerank_model: str = "gemini-2.0-flash"
     
     # Redis
     redis_url: str = "redis://localhost:6379/0"
