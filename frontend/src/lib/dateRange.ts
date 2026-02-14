@@ -1,4 +1,14 @@
 export function getDateRangeFromParam(dateParam: string): { from: string; to: string } | null {
+    const yearMatch = /^(\d{4})$/.exec(dateParam)
+    if (yearMatch) {
+        const year = Number(yearMatch[1])
+        if (Number.isFinite(year)) {
+            const from = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0))
+            const to = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999))
+            return { from: from.toISOString(), to: to.toISOString() }
+        }
+    }
+
     const monthMatch = /^(\d{4})-(\d{2})$/.exec(dateParam)
     if (monthMatch) {
         const year = Number(monthMatch[1])

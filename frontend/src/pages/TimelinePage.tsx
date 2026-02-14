@@ -487,6 +487,15 @@ export function TimelinePage() {
         )
     })()
 
+    const handleOpenSearchWorkspace = useCallback(() => {
+        const params = new URLSearchParams()
+        if (selectedBucket) params.set('date', selectedBucket)
+        if (selectedFileTypes.length) params.set('types', selectedFileTypes.join(','))
+
+        const qs = params.toString()
+        navigate(qs ? `/?${qs}` : '/')
+    }, [navigate, selectedBucket, selectedFileTypes])
+
     return (
         <div className="h-full overflow-auto p-6">
             <div className="mx-auto max-w-7xl space-y-6">
@@ -842,7 +851,7 @@ export function TimelinePage() {
                                 )}
                             </div>
                             <div className="flex items-center gap-2">
-                                <Button size="sm" variant="outline" onClick={() => navigate('/')} className="gap-1.5">
+                                <Button size="sm" variant="outline" onClick={handleOpenSearchWorkspace} className="gap-1.5">
                                     <Search className="h-3.5 w-3.5" />
                                     {t('timeline.openSearchWorkspace')}
                                 </Button>
