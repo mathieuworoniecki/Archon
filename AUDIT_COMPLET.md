@@ -2770,26 +2770,27 @@ Date de mise a jour: 2026-02-13 (batch multi-agents)
 
 ### 10. Pas de Loading Skeletons
 
-**Problème** : Chaque page affiche un spinner centré pendant le chargement. Pattern paresseux.
-**Solution** : Skeleton loaders qui mimiquent la forme du contenu attendu (cartes de projets, lignes de résultats, etc.).
+**État** : Corrigé.
+**Avant** : spinner centré + page perçue comme "vide" pendant le chargement.
+**Maintenant** : skeleton loaders alignés sur la structure attendue (projets, recherche, timeline, graphe, galerie, scans) via `frontend/src/components/ui/skeleton.tsx`.
 
 ---
 
 ### 11. Pas de Recherches Récentes / Suggestions
 
-**Problème** : La SearchBar ne mémorise rien. À chaque ouverture, champ vide.
-**Solution** :
-
-- Historique des 10 dernières recherches (localStorage)
-- Autocomplete/suggestions basées sur les entités détectées (NER)
-- `Ctrl+K` ouvre un command palette (comme Spotlight/Alfred)
+**État** : Corrigé (recherches récentes).
+**Maintenant** :
+- Historique des 10 dernières recherches (localStorage, partagé via `frontend/src/lib/recentSearches.ts`).
+- `Ctrl+K` ouvre un command palette (navigation + recherches récentes).
+- La barre de recherche (mode contenu) propose les recherches récentes en dropdown.
+**Reste possible** : suggestions basées sur entités (NER) / auto-complete avancé.
 
 ---
 
 ### 12. Navigation : Pas de Breadcrumbs
 
-**Problème** : Quand on est dans un projet → cockpit → document, on perd le contexte de navigation.
-**Solution** : Breadcrumb minimal : `Projets > Epstein > Cockpit > document.pdf`
+**État** : Corrigé.
+**Maintenant** : breadcrumb minimal via `frontend/src/components/AppBreadcrumb.tsx` (+ breadcrumb chemin dans le viewer).
 
 ---
 
@@ -2864,9 +2865,9 @@ Premier lancement → tour guidé avec 3-4 étapes : "Voici vos projets", "Lance
 | 4   | SSE Auto-Reconnect      | ⭐⭐⭐⭐   | 🔧🔧 Moyen  | ⭐⭐  | fait |
 | 13  | Résumé Post-Scan        | ⭐⭐⭐⭐   | 🔧🔧 Moyen  | ⭐⭐  | fait |
 | 9   | Raccourcis Clavier      | ⭐⭐⭐     | 🔧 Faible   | ⭐⭐  | fait |
-| 10  | Loading Skeletons       | ⭐⭐⭐     | 🔧🔧 Moyen  | ⭐    | partiel |
+| 10  | Loading Skeletons       | ⭐⭐⭐     | 🔧🔧 Moyen  | ⭐    | fait |
 | 7   | Infinite Scroll Gallery | ⭐⭐⭐     | 🔧 Faible   | ⭐⭐  | fait |
-| 11  | Command Palette         | ⭐⭐⭐⭐   | 🔧🔧🔧 Haut | ⭐    | partiel |
+| 11  | Command Palette         | ⭐⭐⭐⭐   | 🔧🔧🔧 Haut | ⭐    | fait |
 | 6   | Timeline → Cockpit      | ⭐⭐⭐     | 🔧🔧 Moyen  | ⭐    | fait |
 | 8   | Chat Streaming          | ⭐⭐⭐⭐   | 🔧🔧🔧 Haut | ⭐    | fait |
 | 14  | Cache SWR               | ⭐⭐⭐     | 🔧🔧🔧 Haut | ○     | partiel |
@@ -2894,8 +2895,8 @@ Premier lancement → tour guidé avec 3-4 étapes : "Voici vos projets", "Lance
 
 ### Sprint 3 — Polish (3-5 jours)
 
-11. **Command palette** (`Ctrl+K`) — `partiel`
+11. **Command palette** (`Ctrl+K`) — `fait`
 12. **Chat streaming** SSE — `fait`
-13. **Loading skeletons** — `partiel`
-14. **Breadcrumbs** — `partiel`
+13. **Loading skeletons** — `fait`
+14. **Breadcrumbs** — `fait`
 15. **Hover preview** documents — `a faire`
