@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Search, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { getDocumentFileUrl, getDocument, Document, API_BASE } from '@/lib/api'
+import { getDocumentFileUrl, getDocument, getDocumentThumbnailUrl, Document } from '@/lib/api'
 import { useTranslation } from '@/contexts/I18nContext'
+import { isImageFileName, isVideoFileName } from '@/lib/media'
 
 interface MediaViewerProps {
     documents: Document[]
@@ -24,8 +25,8 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
     const navigate = useNavigate()
 
     const currentDoc = documents[currentIndex]
-    const isVideo = currentDoc?.file_name?.match(/\.(mp4|webm|mov|avi)$/i)
-    const isImage = currentDoc?.file_type === 'image' || currentDoc?.file_name?.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/i)
+    const isVideo = !!currentDoc && (currentDoc.file_type === 'video' || isVideoFileName(currentDoc.file_name))
+    const isImage = !!currentDoc && (currentDoc.file_type === 'image' || isImageFileName(currentDoc.file_name))
 
     useEffect(() => {
         setCurrentIndex(initialIndex)
@@ -216,7 +217,7 @@ export function MediaViewer({ documents, initialIndex = 0, isOpen, onClose }: Me
                         {documents.slice(Math.max(0, currentIndex - 5), currentIndex + 6).map((doc, idx) => {
                             const actualIndex = Math.max(0, currentIndex - 5) + idx
                             const isActive = actualIndex === currentIndex
-                            const thumbUrl = `${API_BASE}/documents/${doc.id}/thumbnail`
+                            const thumbUrl = getDocumentThumbnailUrl(doc.id)
                             return (
                                 <button
                                     key={doc.id}

@@ -8,7 +8,7 @@ from typing import Optional
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
@@ -24,7 +24,7 @@ settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # OAuth2 scheme — token URL points to the login endpoint
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -86,7 +86,8 @@ def decode_token(token: str) -> dict:
 
 
 async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    request: Request,
+    token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ) -> User:
     """FastAPI dependency: get the current authenticated user."""
@@ -98,7 +99,22 @@ async def get_current_user(
         # No users exist yet — return a fake admin object
         fake = User(id=0, username="dev", role="admin", is_active=True)
         return fake
-    
+
+    # Support token passed in query string for file/media endpoints
+    # consumed directly by the browser (`img`, `video`, PDF embeds).
+    if not token:
+        token = request.query_params.get("access_token") or request.query_params.get("token")
+
+    if token and token.lower().startswith("bearer "):
+        token = token[7:].strip()
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     payload = decode_token(token)
     
     if payload.get("type") != "access":
@@ -127,7 +143,8 @@ async def get_current_user(
 def require_role(*roles: str):
     """FastAPI dependency factory: require specific role(s)."""
     async def role_checker(current_user: User = Depends(get_current_user)):
-        if current_user.role.value not in roles:
+        user_role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+        if user_role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Insufficient permissions",

@@ -26,6 +26,7 @@ export interface TimelineRange {
 interface UseTimelineOptions {
     granularity?: 'day' | 'week' | 'month' | 'year'
     scanId?: number
+    enabled?: boolean
 }
 
 export function useTimeline(options: UseTimelineOptions = {}) {
@@ -35,9 +36,10 @@ export function useTimeline(options: UseTimelineOptions = {}) {
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
 
-    const { granularity = 'month', scanId } = options
+    const { granularity = 'month', scanId, enabled = true } = options
 
     const fetchTimeline = useCallback(async () => {
+        if (!enabled) return
         setIsLoading(true)
         setError(null)
 
@@ -57,9 +59,10 @@ export function useTimeline(options: UseTimelineOptions = {}) {
         } finally {
             setIsLoading(false)
         }
-    }, [granularity, scanId, selectedProject?.path])
+    }, [enabled, granularity, scanId, selectedProject?.path])
 
     const fetchRange = useCallback(async () => {
+        if (!enabled) return
         try {
             const params = new URLSearchParams()
             if (scanId) params.set('scan_id', scanId.toString())
@@ -73,12 +76,16 @@ export function useTimeline(options: UseTimelineOptions = {}) {
         } catch {
             // non-critical: range info supplements the timeline
         }
-    }, [scanId, selectedProject?.path])
+    }, [enabled, scanId, selectedProject?.path])
 
     useEffect(() => {
+        if (!enabled) {
+            setIsLoading(false)
+            return
+        }
         fetchTimeline()
         fetchRange()
-    }, [fetchTimeline, fetchRange])
+    }, [enabled, fetchTimeline, fetchRange])
 
     return {
         data,

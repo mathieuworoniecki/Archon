@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { useTranslation } from '@/contexts/I18nContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { getSearchFacets, type SearchFacets } from '@/lib/api'
+import { formatEstimatedNumber } from '@/lib/formatters'
 
 export interface SearchOptions {
     file_types?: string[]
@@ -123,7 +124,7 @@ export function SearchBar({ onSearch, isLoading, disabled, initialQuery, initial
                             <SelectItem value="__all__">{t('searchBar.allProjects')}</SelectItem>
                             {projects.map((p) => (
                                 <SelectItem key={p.path} value={p.path}>
-                                    {p.name} ({p.file_count})
+                                    {p.name} ({formatEstimatedNumber(p.file_count, p.file_count_estimated)})
                                 </SelectItem>
                             ))}
                         </SelectContent>
@@ -228,4 +229,3 @@ export function SearchBar({ onSearch, isLoading, disabled, initialQuery, initial
         </div>
     )
 }
-

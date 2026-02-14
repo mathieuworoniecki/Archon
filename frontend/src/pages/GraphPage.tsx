@@ -37,7 +37,7 @@ export function GraphPage() {
     const [error, setError] = useState<string | null>(null)
     const [activeType, setActiveType] = useState<EntityType | null>(null)
     const [nodeLimit, setNodeLimit] = useState(60)
-    const [minCount, setMinCount] = useState(2)
+    const [minCount, setMinCount] = useState(1)
     const [isFullscreen, setIsFullscreen] = useState(false)
     const containerRef = useRef<HTMLDivElement>(null)
     const [dimensions, setDimensions] = useState({ width: 900, height: 600 })
@@ -46,14 +46,15 @@ export function GraphPage() {
     const [pathStart, setPathStart] = useState<string | null>(null)
     const [pathEnd, setPathEnd] = useState<string | null>(null)
     const [showCommunities, setShowCommunities] = useState(false)
+    const requestSeqRef = useRef(0)
 
     // Measure container
     const measureContainer = useCallback(() => {
         if (containerRef.current) {
             const rect = containerRef.current.getBoundingClientRect()
             setDimensions({
-                width: Math.max(600, rect.width - 32),
-                height: isFullscreen ? window.innerHeight - 80 : Math.max(400, rect.height - 120),
+                width: Math.max(280, rect.width - 32),
+                height: isFullscreen ? Math.max(320, window.innerHeight - 80) : Math.max(320, rect.height - 120),
             })
         }
     }, [isFullscreen])
@@ -65,24 +66,34 @@ export function GraphPage() {
     }, [measureContainer])
 
     // Fetch graph data
-    const fetchGraph = useCallback(() => {
+    const fetchGraph = useCallback(async () => {
+        const requestId = ++requestSeqRef.current
         setIsLoading(true)
         setError(null)
 
-        const params = new URLSearchParams()
-        if (activeType) params.set('entity_type', activeType)
-        params.set('limit', nodeLimit.toString())
-        params.set('min_count', minCount.toString())
+        try {
+            const params = new URLSearchParams()
+            if (activeType) params.set('entity_type', activeType)
+            params.set('limit', nodeLimit.toString())
+            params.set('min_count', minCount.toString())
+            if (selectedProject?.path) params.set('project_path', selectedProject.path)
 
-        authFetch(`${API_BASE}/entities/graph?${params}`)
-            .then(res => {
-                if (!res.ok) throw new Error('Failed to fetch graph data')
-                return res.json()
-            })
-            .then(setData)
-            .catch(err => setError(err.message))
-            .finally(() => setIsLoading(false))
-    }, [activeType, nodeLimit, minCount])
+            const res = await authFetch(`${API_BASE}/entities/graph?${params}`)
+            if (!res.ok) {
+                const details = await res.text().catch(() => '')
+                throw new Error(details || 'Failed to fetch graph data')
+            }
+
+            const payload = await res.json()
+            if (requestId !== requestSeqRef.current) return
+            setData(payload)
+        } catch (err) {
+            if (requestId !== requestSeqRef.current) return
+            setError(err instanceof Error ? err.message : 'Failed to fetch graph data')
+        } finally {
+            if (requestId === requestSeqRef.current) setIsLoading(false)
+        }
+    }, [activeType, nodeLimit, minCount, selectedProject?.path])
 
     useEffect(() => { fetchGraph() }, [fetchGraph])
 
@@ -107,15 +118,73 @@ export function GraphPage() {
         setTimeout(measureContainer, 100)
     }
 
+    const edgeEndpointId = (value: string | { id: string }): string => {
+        if (typeof value === 'string') return value
+        return value.id
+    }
+
+    const graphView = useMemo(() => {
+        if (!data) return null
+
+        const originalNodes = data.nodes.length
+        const originalEdges = data.edges.length
+        const NODE_SOFT_LIMIT = 280
+        const EDGE_SOFT_LIMIT = 2200
+
+        if (originalNodes <= NODE_SOFT_LIMIT && originalEdges <= EDGE_SOFT_LIMIT) {
+            return {
+                nodes: data.nodes,
+                edges: data.edges,
+                reduced: false,
+                originalNodes,
+                originalEdges,
+            }
+        }
+
+        const rankedNodes = [...data.nodes]
+            .sort((a, b) => {
+                if (b.document_count !== a.document_count) return b.document_count - a.document_count
+                return b.total_count - a.total_count
+            })
+            .slice(0, NODE_SOFT_LIMIT)
+
+        const allowedNodeIds = new Set(rankedNodes.map((node) => node.id))
+        const reducedEdges = data.edges
+            .filter((edge) => allowedNodeIds.has(edgeEndpointId(edge.source)) && allowedNodeIds.has(edgeEndpointId(edge.target)))
+            .sort((a, b) => b.weight - a.weight)
+            .slice(0, EDGE_SOFT_LIMIT)
+
+        const connectedNodeIds = new Set<string>()
+        for (const edge of reducedEdges) {
+            connectedNodeIds.add(edgeEndpointId(edge.source))
+            connectedNodeIds.add(edgeEndpointId(edge.target))
+        }
+
+        const reducedNodes = rankedNodes.filter((node) => reducedEdges.length === 0 || connectedNodeIds.has(node.id))
+
+        return {
+            nodes: reducedNodes,
+            edges: reducedEdges,
+            reduced: true,
+            originalNodes,
+            originalEdges,
+        }
+    }, [data])
+
+    const graphNodes = graphView?.nodes ?? []
+    const graphEdges = graphView?.edges ?? []
+
     // BFS shortest path
     const shortestPath = useMemo(() => {
-        if (!pathStart || !pathEnd || !data) return null
+        if (!pathStart || !pathEnd || graphEdges.length === 0) return null
         const adj: Record<string, string[]> = {}
-        for (const edge of data.edges) {
-            if (!adj[edge.source]) adj[edge.source] = []
-            if (!adj[edge.target]) adj[edge.target] = []
-            adj[edge.source].push(edge.target)
-            adj[edge.target].push(edge.source)
+        for (const edge of graphEdges) {
+            const source = edgeEndpointId(edge.source)
+            const target = edgeEndpointId(edge.target)
+            if (!adj[source]) adj[source] = []
+            if (!adj[target]) adj[target] = []
+            adj[source].push(target)
+            adj[target].push(source)
         }
         const queue: string[][] = [[pathStart]]
         const visited = new Set<string>([pathStart])
@@ -131,23 +200,23 @@ export function GraphPage() {
             }
         }
         return [] // no path
-    }, [pathStart, pathEnd, data])
+    }, [pathStart, pathEnd, graphEdges])
 
-    const getNodeName = (id: string) => data?.nodes.find(n => n.id === id)?.text || id
+    const getNodeName = (id: string) => graphNodes.find((n) => n.id === id)?.text || data?.nodes.find((n) => n.id === id)?.text || id
 
     // Label propagation community detection
     const communities = useMemo(() => {
-        if (!showCommunities || !data || data.nodes.length === 0) return new Map<string, number>()
+        if (!showCommunities || graphNodes.length === 0) return new Map<string, number>()
 
         // Initialize: each node is its own community
         const labels = new Map<string, number>()
-        data.nodes.forEach((n, i) => labels.set(n.id, i))
+        graphNodes.forEach((n, i) => labels.set(n.id, i))
 
         // Build adjacency list with weights
         const adj = new Map<string, { neighbor: string; weight: number }[]>()
-        for (const edge of data.edges) {
-            const s = typeof edge.source === 'object' ? (edge.source as any).id : edge.source
-            const t = typeof edge.target === 'object' ? (edge.target as any).id : edge.target
+        for (const edge of graphEdges) {
+            const s = edgeEndpointId(edge.source)
+            const t = edgeEndpointId(edge.target)
             if (!adj.has(s)) adj.set(s, [])
             if (!adj.has(t)) adj.set(t, [])
             adj.get(s)!.push({ neighbor: t, weight: edge.weight })
@@ -155,7 +224,7 @@ export function GraphPage() {
         }
 
         // Iterate label propagation (10 rounds)
-        const nodeIds = data.nodes.map(n => n.id)
+        const nodeIds = graphNodes.map(n => n.id)
         for (let iter = 0; iter < 10; iter++) {
             let changed = false
             // Shuffle order
@@ -192,7 +261,7 @@ export function GraphPage() {
             result.set(nodeId, compactMap.get(label)!)
         }
         return result
-    }, [showCommunities, data])
+    }, [showCommunities, graphEdges, graphNodes])
 
     return (
         <div className={cn(
@@ -213,7 +282,10 @@ export function GraphPage() {
                             <div>
                                 <h1 className="text-2xl font-bold">{t('graph.title')}</h1>
                                 <p className="text-sm text-muted-foreground">
-                                    {data ? `${data.nodes.length} ${t('graph.nodes')} · ${data.edges.length} ${t('graph.edges')}` : t('graph.loading')}
+                                    {graphView
+                                        ? `${graphNodes.length} ${t('graph.nodes')} · ${graphEdges.length} ${t('graph.edges')}`
+                                        : t('graph.loading')
+                                    }
                                 </p>
                             </div>
                         </div>
@@ -354,6 +426,15 @@ export function GraphPage() {
                         </Button>
                     </div>
                 )}
+
+                {graphView?.reduced && (
+                    <div className="mt-3 flex items-center gap-2 text-xs text-amber-400">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                        <span>
+                            Mode allégé activé: {graphView.originalNodes}→{graphNodes.length} nœuds, {graphView.originalEdges}→{graphEdges.length} liens.
+                        </span>
+                    </div>
+                )}
             </div>
 
             {/* Graph Area */}
@@ -367,16 +448,29 @@ export function GraphPage() {
                                 <AlertTriangle className="h-10 w-10 text-red-400 mx-auto mb-3" />
                                 <p className="text-sm text-red-400 font-medium mb-1">{t('graph.loadError')}</p>
                                 <p className="text-xs text-muted-foreground mb-4">{error}</p>
-                                <Button variant="outline" size="sm" onClick={fetchGraph} className="gap-1.5">
-                                    <RefreshCw className="h-3.5 w-3.5" />
-                                    {t('common.retry')}
-                                </Button>
+                                <div className="flex items-center justify-center gap-2">
+                                    <Button variant="outline" size="sm" onClick={fetchGraph} className="gap-1.5">
+                                        <RefreshCw className="h-3.5 w-3.5" />
+                                        {t('common.retry')}
+                                    </Button>
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-xs"
+                                        onClick={() => {
+                                            setNodeLimit(30)
+                                            setMinCount((prev) => Math.max(prev, 2))
+                                        }}
+                                    >
+                                        Mode léger
+                                    </Button>
+                                </div>
                             </div>
                         </Card>
-                    ) : data && data.nodes.length > 0 ? (
+                    ) : graphView && graphNodes.length > 0 ? (
                         <RelationshipGraph
-                            nodes={data.nodes}
-                            edges={data.edges}
+                            nodes={graphNodes}
+                            edges={graphEdges}
                             width={dimensions.width}
                             height={dimensions.height}
                             onNodeClick={handleNodeClick}

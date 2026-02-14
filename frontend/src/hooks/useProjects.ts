@@ -6,6 +6,7 @@ export interface Project {
     name: string
     path: string
     file_count: number
+    file_count_estimated?: boolean
     total_size_bytes: number
     last_modified: string | null
     subdirectories: number

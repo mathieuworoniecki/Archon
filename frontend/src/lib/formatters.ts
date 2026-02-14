@@ -1,4 +1,5 @@
 export const formatNumber = (n: number): string => n.toLocaleString()
+export const formatEstimatedNumber = (n: number, estimated?: boolean): string => `${formatNumber(n)}${estimated ? '+' : ''}`
 
 export const formatDuration = (start: string, end?: string, seconds?: number): string => {
     let s: number

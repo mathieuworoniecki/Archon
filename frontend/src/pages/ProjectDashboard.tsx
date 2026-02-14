@@ -35,7 +35,7 @@ import { useTranslation } from '@/contexts/I18nContext'
 import { useTheme } from '@/hooks/useTheme'
 import { toast } from 'sonner'
 import { authFetch } from '@/lib/auth'
-import { formatDuration, formatNumber } from '@/lib/formatters'
+import { formatDuration, formatEstimatedNumber, formatNumber } from '@/lib/formatters'
 
 const DELETE_DELAY_MS = 5000
 
@@ -767,7 +767,7 @@ export function ProjectDashboard() {
                                             {/* File stats */}
                                             <div className="grid grid-cols-3 gap-2 mb-4">
                                                 <div className="text-center p-2 rounded-lg bg-[rgba(22,27,34,0.6)] border border-[rgba(255,255,255,0.06)]">
-                                                    <div className="text-lg font-bold">{formatNumber(project.file_count)}</div>
+                                                    <div className="text-lg font-bold">{formatEstimatedNumber(project.file_count, project.file_count_estimated)}</div>
                                                     <div className="text-[10px] text-muted-foreground uppercase">{t('scans.filesCount')}</div>
                                                 </div>
                                                 <div className="text-center p-2 rounded-lg bg-[rgba(22,27,34,0.6)] border border-[rgba(255,255,255,0.06)]">

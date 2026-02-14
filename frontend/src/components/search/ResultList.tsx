@@ -88,6 +88,19 @@ export function ResultList({
     const [isExporting, setIsExporting] = useState(false)
     const [isAddingFavorites, setIsAddingFavorites] = useState(false)
 
+    useEffect(() => {
+        // Keep multi-selection consistent with the visible list after filters/search updates.
+        setSelectedIds((prev) => {
+            if (prev.size === 0) return prev
+            const allowed = new Set(results.map((r) => r.document_id))
+            const next = new Set<number>()
+            prev.forEach((id) => {
+                if (allowed.has(id)) next.add(id)
+            })
+            return next
+        })
+    }, [results])
+
     const toggleSelection = useCallback((id: number, e: React.MouseEvent) => {
         e.stopPropagation()
         setSelectedIds(prev => {
@@ -310,6 +323,7 @@ export function ResultList({
                                     <ResultCard
                                         result={result}
                                         isSelected={selectedId === result.document_id}
+                                        mode={mode}
                                         onClick={() => onSelect(result)}
                                         className={cn(
                                             selectedIds.has(result.document_id) && "ring-2 ring-primary/50 pl-8"

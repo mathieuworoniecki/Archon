@@ -2,18 +2,19 @@ import { useState, useRef, useCallback } from 'react'
 import { FileText, Image, FileCode, File, Database, Brain, ChevronRight, Archive } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { SearchResult } from '@/lib/api'
+import { SearchResult, getDocumentThumbnailUrl } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { FavoriteButton } from '@/components/favorites/FavoriteButton'
 
 interface ResultCardProps {
     result: SearchResult
     isSelected: boolean
+    mode?: 'search' | 'browse'
     onClick: () => void
     className?: string
 }
 
-export function ResultCard({ result, isSelected, onClick, className }: ResultCardProps) {
+export function ResultCard({ result, isSelected, mode = 'search', onClick, className }: ResultCardProps) {
     const [showPreview, setShowPreview] = useState(false)
     const [previewPos, setPreviewPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
     const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -32,6 +33,7 @@ export function ResultCard({ result, isSelected, onClick, className }: ResultCar
     }
 
     const isImage = result.file_type === 'image'
+    const isSearchMode = mode === 'search'
 
     const handleMouseEnter = useCallback((e: React.MouseEvent) => {
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -60,10 +62,10 @@ export function ResultCard({ result, isSelected, onClick, className }: ResultCar
                 <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2.5 min-w-0">
                         {/* Inline thumbnail for visual types */}
-                        {(result.file_type === 'image' || result.file_type === 'pdf') ? (
+                        {result.file_type === 'image' ? (
                             <div className="w-10 h-10 rounded-md overflow-hidden bg-muted/30 border border-border/50 shrink-0">
                                 <img
-                                    src={`/api/documents/${result.document_id}/thumbnail`}
+                                    src={getDocumentThumbnailUrl(result.document_id)}
                                     alt=""
                                     className="w-full h-full object-cover"
                                     loading="lazy"
@@ -100,12 +102,17 @@ export function ResultCard({ result, isSelected, onClick, className }: ResultCar
                     </div>
                 </div>
 
-                {/* Snippet with highlighting */}
-                {result.snippet && (
+                {/* Search snippet or browse path */}
+                {isSearchMode && result.snippet && (
                     <div
                         className="text-sm text-muted-foreground line-clamp-3"
                         dangerouslySetInnerHTML={{ __html: result.snippet }}
                     />
+                )}
+                {!isSearchMode && (
+                    <p className="text-xs text-muted-foreground truncate" title={result.file_path}>
+                        {result.file_path}
+                    </p>
                 )}
 
                 {/* Footer with badges */}
@@ -122,39 +129,39 @@ export function ResultCard({ result, isSelected, onClick, className }: ResultCar
                         </Badge>
                     )}
 
-                    {/* Source indicators */}
-                    {result.from_meilisearch && (
+                    {/* Search-only ranking signals */}
+                    {isSearchMode && result.from_meilisearch && (
                         <Badge variant="secondary" className="text-xs gap-1">
                             <Database className="h-3 w-3" />
                             #{result.meilisearch_rank}
                         </Badge>
                     )}
-                    {result.from_qdrant && (
+                    {isSearchMode && result.from_qdrant && (
                         <Badge variant="secondary" className="text-xs gap-1">
                             <Brain className="h-3 w-3" />
                             #{result.qdrant_rank}
                         </Badge>
                     )}
-
-                    {/* Score — visual relevance bar */}
-                    <div className="flex items-center gap-1.5 ml-auto" title={`Score: ${(result.score * 100).toFixed(1)}%`}>
-                        <div className="w-16 h-1.5 rounded-full bg-muted/30 overflow-hidden">
-                            <div
-                                className="h-full rounded-full transition-all duration-300"
-                                style={{
-                                    width: `${Math.min(result.score * 100, 100)}%`,
-                                    backgroundColor: result.score >= 0.7
-                                        ? `hsl(${Math.round(120 * ((result.score - 0.7) / 0.3))}, 65%, 45%)`
-                                        : result.score >= 0.4
-                                            ? `hsl(${Math.round(40 * ((result.score - 0.4) / 0.3))}, 70%, 50%)`
-                                            : 'hsl(0, 65%, 50%)',
-                                }}
-                            />
+                    {isSearchMode && (
+                        <div className="flex items-center gap-1.5 ml-auto" title={`Score: ${(result.score * 100).toFixed(1)}%`}>
+                            <div className="w-16 h-1.5 rounded-full bg-muted/30 overflow-hidden">
+                                <div
+                                    className="h-full rounded-full transition-all duration-300"
+                                    style={{
+                                        width: `${Math.min(result.score * 100, 100)}%`,
+                                        backgroundColor: result.score >= 0.7
+                                            ? `hsl(${Math.round(120 * ((result.score - 0.7) / 0.3))}, 65%, 45%)`
+                                            : result.score >= 0.4
+                                                ? `hsl(${Math.round(40 * ((result.score - 0.4) / 0.3))}, 70%, 50%)`
+                                                : 'hsl(0, 65%, 50%)',
+                                    }}
+                                />
+                            </div>
+                            <span className="text-[10px] text-muted-foreground tabular-nums w-8 text-right">
+                                {(result.score * 100).toFixed(0)}%
+                            </span>
                         </div>
-                        <span className="text-[10px] text-muted-foreground tabular-nums w-8 text-right">
-                            {(result.score * 100).toFixed(0)}%
-                        </span>
-                    </div>
+                    )}
                 </div>
             </div>
 
@@ -171,7 +178,7 @@ export function ResultCard({ result, isSelected, onClick, className }: ResultCar
                         {isImage ? (
                             <div className="p-2">
                                 <img
-                                    src={`/api/documents/${result.document_id}/thumbnail`}
+                                    src={getDocumentThumbnailUrl(result.document_id)}
                                     alt={result.file_name}
                                     className="w-full h-40 object-cover rounded-lg bg-muted"
                                     onError={(e) => {
@@ -193,6 +200,11 @@ export function ResultCard({ result, isSelected, onClick, className }: ResultCar
                                         className="text-xs text-muted-foreground line-clamp-6 leading-relaxed"
                                         dangerouslySetInnerHTML={{ __html: result.snippet }}
                                     />
+                                )}
+                                {!result.snippet && (
+                                    <div className="text-xs text-muted-foreground line-clamp-3 leading-relaxed">
+                                        {result.file_path}
+                                    </div>
                                 )}
                                 <div className="text-[10px] text-muted-foreground/60 truncate">
                                     {result.file_path}

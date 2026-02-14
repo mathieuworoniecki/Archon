@@ -1,14 +1,20 @@
 import { useMemo } from 'react'
-import { Calendar } from 'lucide-react'
+import { Calendar, RefreshCw } from 'lucide-react'
 import { useTimeline, TimelineDataPoint } from '@/hooks/useTimeline'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/contexts/I18nContext'
+import { Button } from '@/components/ui/button'
 
 interface TimelineHeatmapProps {
     granularity?: 'day' | 'week' | 'month' | 'year'
     onDateSelect?: (date: string) => void
     dateFrom?: string
     dateTo?: string
+    dataPoints?: TimelineDataPoint[]
+    totalDocuments?: number
+    isLoading?: boolean
+    error?: string | null
+    onRetry?: () => void
     className?: string
 }
 
@@ -51,21 +57,37 @@ export function TimelineHeatmap({
     onDateSelect,
     dateFrom,
     dateTo,
+    dataPoints,
+    totalDocuments,
+    isLoading: isLoadingOverride,
+    error: errorOverride,
+    onRetry,
     className 
 }: TimelineHeatmapProps) {
-    const { data, isLoading, error } = useTimeline({ granularity })
+    const shouldUseInternalQuery = typeof dataPoints === 'undefined'
+    const timelineQuery = useTimeline({ granularity, enabled: shouldUseInternalQuery })
     const { t } = useTranslation()
+    const sourceData = shouldUseInternalQuery ? (timelineQuery.data?.data ?? []) : dataPoints
+    const sourceTotalDocuments = shouldUseInternalQuery
+        ? (timelineQuery.data?.total_documents ?? 0)
+        : (totalDocuments ?? sourceData?.reduce((acc, item) => acc + item.count, 0) ?? 0)
+    const isLoading = typeof isLoadingOverride === 'boolean'
+        ? isLoadingOverride
+        : (shouldUseInternalQuery ? timelineQuery.isLoading : false)
+    const error = typeof errorOverride === 'string'
+        ? errorOverride
+        : (shouldUseInternalQuery ? timelineQuery.error : null)
 
     // Filter data based on date range (for drill-down zoom)
     const displayData = useMemo(() => {
-        if (!data?.data) return []
-        if (!dateFrom && !dateTo) return data.data
-        return data.data.filter(point => {
+        if (!sourceData?.length) return []
+        if (!dateFrom && !dateTo) return sourceData
+        return sourceData.filter(point => {
             if (dateFrom && point.date < dateFrom) return false
             if (dateTo && point.date > dateTo) return false
             return true
         })
-    }, [data, dateFrom, dateTo])
+    }, [dateFrom, dateTo, sourceData])
 
     const maxCount = useMemo(() => {
         if (!displayData.length) return 1
@@ -81,7 +103,21 @@ export function TimelineHeatmap({
         )
     }
 
-    if (error || !displayData.length) {
+    if (error) {
+        return (
+            <div className={cn("flex flex-col items-center justify-center gap-2 text-center text-red-500 p-4", className)}>
+                <p className="text-sm">{t('timeline.error')}: {error}</p>
+                {onRetry && (
+                    <Button variant="outline" size="sm" onClick={onRetry} className="gap-1.5">
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        {t('common.retry')}
+                    </Button>
+                )}
+            </div>
+        )
+    }
+
+    if (!displayData.length) {
         return null
     }
 
@@ -90,17 +126,17 @@ export function TimelineHeatmap({
             {/* Header */}
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Calendar className="h-4 w-4" />
-                <span>{t('timelineHeatmap.header').replace('{count}', (data?.total_documents ?? 0).toLocaleString())}</span>
+                <span>{t('timelineHeatmap.header').replace('{count}', sourceTotalDocuments.toLocaleString())}</span>
             </div>
 
             {/* Bar Chart View — much more visually impactful than tiny sparse squares */}
-            <div className="flex items-end gap-1 h-40 pt-2 overflow-x-auto pb-6 relative">
+            <div className="relative flex h-40 items-end gap-1 overflow-x-auto pb-6 pt-2">
                 {displayData.map((point) => {
                     const heightPct = maxCount > 0 ? Math.max((point.count / maxCount) * 100, 2) : 2
                     return (
                         <div
                             key={point.date}
-                            className="flex flex-col items-center flex-shrink-0 group"
+                            className="group relative flex h-full flex-shrink-0 flex-col items-center justify-end"
                             style={{ minWidth: displayData.length > 24 ? '16px' : '28px' }}
                         >
                             <button
@@ -111,11 +147,11 @@ export function TimelineHeatmap({
                                     getIntensityColor(point.count, maxCount),
                                     onDateSelect && "cursor-pointer"
                                 )}
-                                style={{ height: `${heightPct}%` }}
+                                style={{ height: `${Math.max(heightPct, 4)}%` }}
                             />
                             {/* Label — show on hover when too many bars */}
                             <span className={cn(
-                                "text-[9px] text-muted-foreground mt-1 whitespace-nowrap absolute bottom-0",
+                                "absolute bottom-0 mt-1 whitespace-nowrap text-[9px] text-muted-foreground",
                                 displayData.length > 36 ? "hidden group-hover:block" : ""
                             )}>
                                 {formatDateLabel(point.date, granularity)}

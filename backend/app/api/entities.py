@@ -5,7 +5,7 @@ Provides access to extracted named entities
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_, tuple_
 
 from ..database import get_db
 from ..models import Entity, Document, User
@@ -197,6 +197,7 @@ def get_entity_graph(
     entity_type: Optional[str] = Query(None, pattern="^(PER|ORG|LOC|MISC|DATE)$"),
     min_count: int = Query(2, ge=1, description="Minimum mentions to include entity"),
     limit: int = Query(60, ge=10, le=200, description="Max number of nodes"),
+    project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -215,7 +216,18 @@ def get_entity_graph(
         Entity.type,
         func.sum(Entity.count).label("total_count"),
         func.count(Entity.document_id.distinct()).label("document_count")
-    ).group_by(Entity.text, Entity.type)
+    )
+
+    normalized_project_path = project_path.rstrip("/\\") if project_path else None
+    if normalized_project_path:
+        entity_query = entity_query.join(Document, Document.id == Entity.document_id).filter(
+            or_(
+                Document.file_path == normalized_project_path,
+                Document.file_path.like(f"{normalized_project_path}/%"),
+            )
+        )
+
+    entity_query = entity_query.group_by(Entity.text, Entity.type)
 
     if entity_type:
         entity_query = entity_query.filter(Entity.type == entity_type)
@@ -245,13 +257,29 @@ def get_entity_graph(
 
     # Step 2: Find co-occurrences via shared documents
     # Get all (document_id, entity_key) pairs for our top entities
-    entity_texts = [e.text for e in top_entities]
+    entity_pairs = {(e.text, e.type) for e in top_entities}
     
     doc_entities_query = db.query(
         Entity.document_id,
         Entity.text,
         Entity.type
-    ).filter(Entity.text.in_(entity_texts))
+    )
+
+    if normalized_project_path:
+        doc_entities_query = doc_entities_query.join(Document, Document.id == Entity.document_id).filter(
+            or_(
+                Document.file_path == normalized_project_path,
+                Document.file_path.like(f"{normalized_project_path}/%"),
+            )
+        )
+
+    if len(entity_pairs) == 1:
+        only_text, only_type = next(iter(entity_pairs))
+        doc_entities_query = doc_entities_query.filter(Entity.text == only_text, Entity.type == only_type)
+    else:
+        doc_entities_query = doc_entities_query.filter(
+            tuple_(Entity.text, Entity.type).in_(list(entity_pairs))
+        )
 
     if entity_type:
         doc_entities_query = doc_entities_query.filter(Entity.type == entity_type)

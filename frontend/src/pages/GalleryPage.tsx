@@ -6,6 +6,8 @@ import { GalleryView } from '@/components/gallery/GalleryView'
 import { Document, API_BASE } from '@/lib/api'
 import { authFetch } from '@/lib/auth'
 import { useTranslation } from '@/contexts/I18nContext'
+import { useProject } from '@/contexts/ProjectContext'
+import { isLikelyMediaDocument } from '@/lib/media'
 
 const PAGE_SIZE = 50
 
@@ -14,42 +16,80 @@ export function GalleryPage() {
     const [isLoading, setIsLoading] = useState(true)
     const [isLoadingMore, setIsLoadingMore] = useState(false)
     const [hasMore, setHasMore] = useState(true)
+    const [nextOffset, setNextOffset] = useState(0)
     const [searchQuery, setSearchQuery] = useState('')
     const [searchInput, setSearchInput] = useState('')
     const [error, setError] = useState<string | null>(null)
     const { t } = useTranslation()
+    const { selectedProject } = useProject()
     const sentinelRef = useRef<HTMLDivElement>(null)
 
     // Load media documents with pagination
     const fetchMedia = useCallback(async (offset = 0, append = false) => {
-        if (offset === 0) setIsLoading(true)
+        if (offset === 0 && !append) setIsLoading(true)
         else setIsLoadingMore(true)
         try {
-            const response = await authFetch(
-                `${API_BASE}/documents/?file_types=image&file_types=video&limit=${PAGE_SIZE}&skip=${offset}`
-            )
-            if (response.ok) {
+            let cursor = offset
+            let reachedEnd = false
+            let batchCount = 0
+            const mediaBatch: Document[] = []
+            const localSeen = new Set<number>()
+
+            // Some datasets contain many "unknown" docs that are not actual media.
+            // We keep fetching raw pages until we collect enough real media docs.
+            while (mediaBatch.length < PAGE_SIZE && !reachedEnd && batchCount < 12) {
+                const params = new URLSearchParams()
+                params.set('limit', String(PAGE_SIZE))
+                params.set('skip', String(cursor))
+                params.append('file_types', 'image')
+                params.append('file_types', 'video')
+                params.append('file_types', 'unknown')
+                if (selectedProject?.path) params.set('project_path', selectedProject.path)
+
+                const response = await authFetch(`${API_BASE}/documents/?${params}`)
+                if (!response.ok) throw new Error('Failed to fetch gallery documents')
+
                 const data = await response.json()
-                const newDocs = data.documents || []
-                setDocuments(prev => append ? [...prev, ...newDocs] : newDocs)
-                setHasMore(newDocs.length >= PAGE_SIZE)
-                setError(null)
+                const rawDocs: Document[] = data.documents || []
+                const filtered = rawDocs.filter((doc) => isLikelyMediaDocument(doc))
+                for (const doc of filtered) {
+                    if (!localSeen.has(doc.id)) {
+                        localSeen.add(doc.id)
+                        mediaBatch.push(doc)
+                    }
+                }
+
+                cursor += rawDocs.length
+                reachedEnd = rawDocs.length < PAGE_SIZE
+                batchCount += 1
+                if (rawDocs.length === 0) break
             }
+
+            setDocuments((prev) => {
+                const base = append ? prev : []
+                const deduped = new Map<number, Document>()
+                for (const doc of base) deduped.set(doc.id, doc)
+                for (const doc of mediaBatch) deduped.set(doc.id, doc)
+                return Array.from(deduped.values())
+            })
+            setNextOffset(cursor)
+            setHasMore(!reachedEnd)
+            setError(null)
         } catch {
             if (!append) setError(t('gallery.error'))
         } finally {
             setIsLoading(false)
             setIsLoadingMore(false)
         }
-    }, [])
+    }, [selectedProject?.path, t])
 
     useEffect(() => { fetchMedia() }, [fetchMedia])
 
     const handleLoadMore = useCallback(() => {
         if (!isLoadingMore && hasMore) {
-            fetchMedia(documents.length, true)
+            fetchMedia(nextOffset, true)
         }
-    }, [documents.length, isLoadingMore, hasMore, fetchMedia])
+    }, [nextOffset, isLoadingMore, hasMore, fetchMedia])
 
     // Infinite scroll via IntersectionObserver
     useEffect(() => {
@@ -72,7 +112,8 @@ export function GalleryPage() {
         if (!searchInput.trim()) {
             setSearchQuery('')
             setHasMore(true)
-            fetchMedia()
+            setNextOffset(0)
+            fetchMedia(0, false)
             return
         }
         setIsLoading(true)
@@ -83,8 +124,9 @@ export function GalleryPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     query: searchInput,
-                    file_types: ['image', 'video'],
-                    limit: 100
+                    file_types: ['image', 'video', 'unknown'],
+                    limit: 100,
+                    project_path: selectedProject?.path
                 })
             })
             if (response.ok) {
@@ -93,13 +135,13 @@ export function GalleryPage() {
                     id: r.document_id,
                     file_name: r.file_name,
                     file_path: r.file_path,
-                    file_type: r.file_type as 'image',
+                    file_type: r.file_type as Document['file_type'],
                     file_size: 0,
                     text_length: 0,
                     has_ocr: true,
                     file_modified_at: null,
                     indexed_at: ''
-                }))
+                })).filter((doc: Document) => isLikelyMediaDocument(doc))
                 setDocuments(searchDocs)
                 setSearchQuery(searchInput)
             }
@@ -141,7 +183,7 @@ export function GalleryPage() {
                         <Button 
                             variant="outline" 
                             size="sm"
-                            onClick={() => { setSearchInput(''); setSearchQuery(''); fetchMedia() }}
+                            onClick={() => { setSearchInput(''); setSearchQuery(''); setHasMore(true); setNextOffset(0); fetchMedia(0, false) }}
                         >
                             {t('gallery.reset')}
                         </Button>

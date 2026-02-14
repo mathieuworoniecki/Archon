@@ -1,25 +1,32 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
-import { SearchBar, type SearchOptions } from '@/components/search/SearchBar'
 import { ResultList } from '@/components/search/ResultList'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { SearchStartPanel } from '@/components/search/SearchStartPanel'
 import { DocumentViewer } from '@/components/viewer/DocumentViewer'
-import { SearchStatsPanel } from '@/components/search/SearchStatsPanel'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { useSearch } from '@/hooks/useSearch'
 import { useStats } from '@/hooks/useStats'
 import { useBrowse } from '@/hooks/useBrowse'
-import { SearchResult, FileType, SortBy, triggerBatchDeepAnalysis } from '@/lib/api'
+import { SearchResult, FileType, SortBy, getDocument, getSearchFacets, triggerBatchDeepAnalysis } from '@/lib/api'
 import { useTranslation } from '@/contexts/I18nContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { cn } from '@/lib/utils'
 import { getDateFromDays, getDateRangeFromParam } from '@/lib/dateRange'
 import {
-    Search, FileText, Image, FileType2, Calendar, SortDesc, X,
-    ChevronLeft, ChevronRight, Video, Layers
+    Search,
+    FileText,
+    Image,
+    FileType2,
+    Calendar,
+    SortDesc,
+    ChevronLeft,
+    ChevronRight,
+    Video,
+    Filter,
+    Sparkles,
+    Zap,
 } from 'lucide-react'
 import {
     DropdownMenu,
@@ -28,40 +35,64 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
-const RECENT_SEARCHES_KEY = 'archon_recent_searches'
-const HOME_MODE_KEY = 'archon_home_mode'
+type QueryMode = 'filename' | 'content'
 
-type PageMode = 'search' | 'browse'
+const RECENT_SEARCHES_KEY = 'archon_recent_searches'
 
 export function HomePage() {
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
-    const queryParam = searchParams.get('q')
+
+    const queryParam = (searchParams.get('q') ?? '').trim()
     const dateParam = searchParams.get('date')
-    const modeParam = searchParams.get('mode') as PageMode | null
+    const typesParam = searchParams.get('types')
+    const docParam = searchParams.get('doc')
 
-    // Search hook
-    const { results, totalResults, processingTime, isLoading, isLoadingMore, hasMore, lastQuery, error, loadMoreError, performSearch, loadMore, retry } = useSearch()
+    const {
+        results,
+        totalResults,
+        processingTime,
+        isLoading,
+        isLoadingMore,
+        hasMore,
+        lastQuery,
+        error,
+        loadMoreError,
+        performSearch,
+        loadMore,
+        retry,
+        clearResults,
+    } = useSearch()
 
-    // Browse hook
     const browse = useBrowse()
 
     const { isLoading: statsLoading, hasDocuments } = useStats()
     const { selectedProject, projects, selectProject } = useProject()
     const { t } = useTranslation()
 
-    // Determine initial mode from URL
-    const [mode, setMode] = useState<PageMode>(() => {
-        if (modeParam === 'browse' || dateParam) return 'browse'
-        const savedMode = localStorage.getItem(HOME_MODE_KEY)
-        return savedMode === 'browse' ? 'browse' : 'search'
-    })
+    const initialTypes = useMemo(() => {
+        if (!typesParam) return [] as FileType[]
+        return typesParam
+            .split(',')
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean) as FileType[]
+    }, [typesParam])
 
+    const requestedDocId = useMemo(() => {
+        if (!docParam) return null
+        const parsed = Number(docParam)
+        if (!Number.isFinite(parsed) || parsed <= 0) return null
+        return parsed
+    }, [docParam])
+
+    const [queryMode, setQueryMode] = useState<QueryMode>(() => (queryParam ? 'content' : 'filename'))
+    const [queryInput, setQueryInput] = useState(queryParam)
+    const [semanticWeight, setSemanticWeight] = useState(0.5)
+    const [selectedFileTypes, setSelectedFileTypes] = useState<FileType[]>(initialTypes)
     const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null)
     const [batchScanStatus, setBatchScanStatus] = useState<'idle' | 'loading' | 'triggered' | 'complete'>('idle')
-    const [browseSearchInput, setBrowseSearchInput] = useState('')
+    const [fileTypeCounts, setFileTypeCounts] = useState<Record<string, number>>({})
 
-    // ─── Search mode helpers ───
     const saveRecentSearch = useCallback((query: string) => {
         const normalized = query.trim()
         if (!normalized) return
@@ -74,81 +105,142 @@ export function HomePage() {
         }
     }, [])
 
-    const handleSearch = useCallback(
-        (query: string, semanticWeight: number, projectPath?: string, options?: SearchOptions) => {
-            const q = query.trim()
-            saveRecentSearch(q)
-            performSearch(q, {
-                semantic_weight: semanticWeight,
-                project_path: projectPath,
-                file_types: options?.file_types,
-            })
-            setSelectedResult(null)
+    const updateTypesInUrl = useCallback((nextTypes: FileType[]) => {
+        const next = new URLSearchParams(searchParams)
+        if (nextTypes.length > 0) next.set('types', nextTypes.join(','))
+        else next.delete('types')
+        setSearchParams(next, { replace: true })
+    }, [searchParams, setSearchParams])
+
+    const runContentSearch = useCallback((rawQuery: string, weight = semanticWeight, types = selectedFileTypes) => {
+        const q = rawQuery.trim()
+        if (!q) {
+            clearResults()
             const next = new URLSearchParams(searchParams)
-            next.set('q', q)
-            if (options?.file_types?.length) next.set('types', options.file_types.join(','))
-            else next.delete('types')
-            next.delete('mode')
-            next.delete('date')
+            next.delete('q')
             setSearchParams(next, { replace: true })
-        },
-        [performSearch, saveRecentSearch, searchParams, setSearchParams]
-    )
+            return
+        }
 
-    // Restore search from URL
-    useEffect(() => {
-        if (mode !== 'search') return
-        if (queryParam === null) return
-        const normalizedQuery = queryParam.trim()
-        if (!normalizedQuery) return
-        if (normalizedQuery === lastQuery) return
-
-        saveRecentSearch(normalizedQuery)
-        const typesParam = searchParams.get('types')
-        const fileTypes = typesParam ? typesParam.split(',').map((s) => s.trim()).filter(Boolean) : undefined
-        performSearch(normalizedQuery, {
-            semantic_weight: 0.5,
+        saveRecentSearch(q)
+        performSearch(q, {
+            semantic_weight: weight,
             project_path: selectedProject?.path,
-            file_types: fileTypes?.length ? fileTypes : undefined,
+            file_types: types.length ? types : undefined,
         })
         setSelectedResult(null)
-    }, [queryParam, mode, performSearch, saveRecentSearch, selectedProject?.path, searchParams, lastQuery])
 
-    // Keep local mode in sync with URL/back-forward navigation.
+        const next = new URLSearchParams(searchParams)
+        next.set('q', q)
+        if (types.length > 0) next.set('types', types.join(','))
+        else next.delete('types')
+        next.delete('date')
+        setSearchParams(next, { replace: true })
+    }, [
+        clearResults,
+        performSearch,
+        saveRecentSearch,
+        searchParams,
+        selectedProject?.path,
+        selectedFileTypes,
+        semanticWeight,
+        setSearchParams,
+    ])
+
+    // Sync URL query back into UI state.
     useEffect(() => {
-        const urlMode: PageMode = modeParam === 'browse' || !!dateParam ? 'browse' : 'search'
-        setMode((prev) => (prev === urlMode ? prev : urlMode))
-    }, [dateParam, modeParam])
+        if (queryParam) {
+            setQueryMode('content')
+            setQueryInput(queryParam)
+        }
+    }, [queryParam])
 
+    // Sync URL file types back into UI state.
     useEffect(() => {
-        localStorage.setItem(HOME_MODE_KEY, mode)
-    }, [mode])
+        setSelectedFileTypes(initialTypes)
+    }, [initialTypes])
 
-    // ─── Browse mode helpers ───
-    // Auto-apply date param from URL
+    // Keep browse filters aligned with selected file types.
+    useEffect(() => {
+        const current = (browse.filters.file_types ?? []) as FileType[]
+        const same = current.length === selectedFileTypes.length
+            && current.every((value, idx) => value === selectedFileTypes[idx])
+
+        if (!same) {
+            browse.updateFilters({
+                file_types: selectedFileTypes.length ? selectedFileTypes : undefined,
+            })
+        }
+    }, [browse.filters.file_types, browse.updateFilters, selectedFileTypes])
+
+    // Apply timeline date preset from URL (compat with redirects).
     useEffect(() => {
         if (!dateParam) return
         const range = getDateRangeFromParam(dateParam)
         if (range) {
-            setMode('browse')
             browse.setDateRange(range.from, range.to)
         }
     }, [dateParam, browse.setDateRange])
 
-    // Debounced browse search
+    // Load per-type counts to make filtering faster in browse/search sidebar.
     useEffect(() => {
-        if (mode !== 'browse') return
-        const normalizedQuery = browseSearchInput.trim()
+        let cancelled = false
+
+        getSearchFacets(selectedProject?.path)
+            .then((facets) => {
+                if (cancelled) return
+                const next: Record<string, number> = {}
+                for (const item of facets.file_types ?? []) {
+                    next[item.value.toLowerCase()] = item.count
+                }
+                setFileTypeCounts(next)
+            })
+            .catch(() => {
+                if (!cancelled) setFileTypeCounts({})
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [selectedProject?.path])
+
+    // Filename mode filters the browse list directly.
+    useEffect(() => {
+        if (queryMode !== 'filename') return
+
+        const normalizedQuery = queryInput.trim()
         const debounce = setTimeout(() => {
             const currentQuery = browse.filters.search ?? ''
             if (normalizedQuery !== currentQuery) {
                 browse.updateFilters({ search: normalizedQuery || undefined })
             }
         }, 250)
-        return () => clearTimeout(debounce)
-    }, [browseSearchInput, mode, browse.filters.search, browse.updateFilters])
 
-    // ─── Shared callbacks ───
+        return () => clearTimeout(debounce)
+    }, [browse.filters.search, browse.updateFilters, queryInput, queryMode])
+
+    // Restore content search from URL when needed.
+    useEffect(() => {
+        if (queryMode !== 'content') return
+        if (!queryParam) return
+        if (queryParam === lastQuery) return
+
+        performSearch(queryParam, {
+            semantic_weight: semanticWeight,
+            project_path: selectedProject?.path,
+            file_types: selectedFileTypes.length ? selectedFileTypes : undefined,
+        })
+        setSelectedResult(null)
+    }, [
+        lastQuery,
+        performSearch,
+        queryMode,
+        queryParam,
+        semanticWeight,
+        selectedFileTypes,
+        selectedProject?.path,
+    ])
+
     const handleSelectResult = useCallback((result: SearchResult) => {
         setSelectedResult(result)
     }, [])
@@ -161,25 +253,84 @@ export function HomePage() {
         navigate('/scans')
     }, [navigate, projects, selectProject])
 
-    const handleModeChange = useCallback((newMode: PageMode) => {
-        setMode(newMode)
+    const handleQueryModeChange = useCallback((mode: QueryMode) => {
+        setQueryMode(mode)
         setSelectedResult(null)
-        const next = new URLSearchParams(searchParams)
-        if (newMode === 'browse') {
-            next.set('mode', 'browse')
-        } else {
-            next.delete('mode')
-            next.delete('date')
-        }
-        setSearchParams(next, { replace: true })
-    }, [searchParams, setSearchParams])
 
-    // ─── Browse filter config ───
+        if (mode === 'filename') {
+            clearResults()
+            const next = new URLSearchParams(searchParams)
+            next.delete('q')
+            setSearchParams(next, { replace: true })
+            return
+        }
+
+        browse.updateFilters({ search: undefined })
+    }, [browse.updateFilters, clearResults, searchParams, setSearchParams])
+
+    const handleSubmit = useCallback((e: React.FormEvent) => {
+        e.preventDefault()
+        if (queryMode === 'content') {
+            runContentSearch(queryInput)
+            return
+        }
+
+        browse.updateFilters({ search: queryInput.trim() || undefined })
+    }, [browse.updateFilters, queryInput, queryMode, runContentSearch])
+
+    const handleSemanticModeChange = useCallback((nextWeight: number) => {
+        setSemanticWeight(nextWeight)
+        if (queryMode !== 'content') return
+
+        const activeQuery = (queryParam || lastQuery).trim()
+        if (!activeQuery) return
+
+        runContentSearch(activeQuery, nextWeight, selectedFileTypes)
+    }, [lastQuery, queryMode, queryParam, runContentSearch, selectedFileTypes])
+
+    const handleToggleFileType = useCallback((type: FileType) => {
+        setSelectedFileTypes((prev) => {
+            const next = prev.includes(type)
+                ? prev.filter((entry) => entry !== type)
+                : [...prev, type]
+
+            updateTypesInUrl(next)
+
+            if (queryMode === 'content') {
+                const activeQuery = (queryParam || lastQuery).trim()
+                if (activeQuery) {
+                    runContentSearch(activeQuery, semanticWeight, next)
+                }
+            }
+
+            return next
+        })
+    }, [lastQuery, queryMode, queryParam, runContentSearch, semanticWeight, updateTypesInUrl])
+
+    const handleClearAll = useCallback(() => {
+        setQueryMode('filename')
+        setQueryInput('')
+        setSemanticWeight(0.5)
+        setSelectedFileTypes([])
+        setSelectedResult(null)
+        setBatchScanStatus('idle')
+
+        clearResults()
+        browse.clearFilters()
+
+        const next = new URLSearchParams(searchParams)
+        next.delete('q')
+        next.delete('types')
+        next.delete('date')
+        setSearchParams(next, { replace: true })
+    }, [browse, clearResults, searchParams, setSearchParams])
+
     const FILE_TYPE_CONFIG: { type: FileType; label: string; icon: React.ElementType; color: string }[] = [
         { type: 'pdf', label: 'PDF', icon: FileText, color: 'text-red-500' },
         { type: 'image', label: t('scans.images'), icon: Image, color: 'text-blue-500' },
         { type: 'text', label: t('scans.text'), icon: FileType2, color: 'text-green-500' },
         { type: 'video', label: t('scans.videos'), icon: Video, color: 'text-purple-500' },
+        { type: 'email', label: 'Email', icon: FileType2, color: 'text-amber-500' },
         { type: 'unknown', label: t('browse.otherTypes'), icon: FileType2, color: 'text-muted-foreground' },
     ]
 
@@ -211,8 +362,7 @@ export function HomePage() {
         }
     }
 
-    // Convert browse docs to SearchResult shape for ResultList
-    const browseResultsAsSearchResults: SearchResult[] = browse.documents.map(doc => ({
+    const browseResultsAsSearchResults: SearchResult[] = browse.documents.map((doc) => ({
         document_id: doc.id,
         file_path: doc.file_path,
         file_name: doc.file_name,
@@ -223,21 +373,35 @@ export function HomePage() {
         meilisearch_rank: null,
         qdrant_rank: null,
         snippet: null,
-        highlights: []
+        highlights: [],
     }))
 
-    const activeFileTypes = (browse.filters.file_types ?? []) as FileType[]
-    const hasActiveFilters = Boolean(
-        activeFileTypes.length > 0 || browse.filters.date_from || browse.filters.date_to || browse.filters.search
-    )
-
-    const currentSortLabel = SORT_OPTIONS.find(o => o.value === browse.filters.sort_by)?.label ?? t('browse.sortLabel')
+    const currentSortLabel = SORT_OPTIONS.find((option) => option.value === browse.filters.sort_by)?.label ?? t('browse.sortLabel')
     const currentSkip = browse.filters.skip ?? 0
     const currentLimit = browse.filters.limit ?? 50
+    const activeContentQuery = (queryParam || (queryMode === 'content' ? lastQuery : '')).trim()
+    const isContentSearchActive = queryMode === 'content' && Boolean(activeContentQuery)
 
-    // Get selected document ID for viewer
+    const hasActiveFilters = Boolean(
+        selectedFileTypes.length > 0
+        || browse.filters.date_from
+        || browse.filters.date_to
+        || (queryMode === 'filename' && queryInput.trim())
+    )
+    const activeFilterCount =
+        selectedFileTypes.length
+        + ((browse.filters.date_from || browse.filters.date_to) ? 1 : 0)
+        + ((queryMode === 'filename' && queryInput.trim()) ? 1 : 0)
+
+    const usesBrowseDataset = !isContentSearchActive
+    const listResults = usesBrowseDataset ? browseResultsAsSearchResults : results
+    const listTotalResults = usesBrowseDataset ? browse.total : totalResults
+    const listProcessingTime = usesBrowseDataset ? 0 : processingTime
+    const listIsLoading = usesBrowseDataset ? browse.isLoading : isLoading
+    const listMode: 'search' | 'browse' = usesBrowseDataset ? 'browse' : 'search'
+
     const selectedDocumentId = selectedResult?.document_id ?? null
-    const currentViewerResults = mode === 'search' ? results : browseResultsAsSearchResults
+    const currentViewerResults = listResults
     const currentViewerIndex = selectedDocumentId
         ? currentViewerResults.findIndex((result) => result.document_id === selectedDocumentId)
         : -1
@@ -254,6 +418,67 @@ export function HomePage() {
         setSelectedResult(currentViewerResults[currentViewerIndex + 1] ?? null)
     }, [canNavigateNext, currentViewerIndex, currentViewerResults])
 
+    useEffect(() => {
+        if (listResults.length === 0) {
+            if (selectedResult) setSelectedResult(null)
+            return
+        }
+
+        if (requestedDocId) {
+            const requested = listResults.find((result) => result.document_id === requestedDocId)
+            if (requested) {
+                if (selectedResult?.document_id !== requested.document_id) {
+                    setSelectedResult(requested)
+                }
+                return
+            }
+            if (selectedResult?.document_id === requestedDocId) {
+                return
+            }
+        }
+
+        if (!selectedResult) {
+            setSelectedResult(listResults[0])
+            return
+        }
+
+        if (!listResults.some((result) => result.document_id === selectedResult.document_id)) {
+            setSelectedResult(listResults[0])
+        }
+    }, [listResults, requestedDocId, selectedResult])
+
+    // Support deep-linking from gallery (`/?doc=123`) even if the doc is outside current page slice.
+    useEffect(() => {
+        if (!requestedDocId) return
+        if (listResults.some((result) => result.document_id === requestedDocId)) return
+
+        let cancelled = false
+        getDocument(requestedDocId)
+            .then((doc) => {
+                if (cancelled) return
+                setSelectedResult({
+                    document_id: doc.id,
+                    file_path: doc.file_path,
+                    file_name: doc.file_name,
+                    file_type: doc.file_type,
+                    score: 0,
+                    from_meilisearch: false,
+                    from_qdrant: false,
+                    meilisearch_rank: null,
+                    qdrant_rank: null,
+                    snippet: null,
+                    highlights: [],
+                })
+            })
+            .catch(() => {
+                // Ignore invalid deep-links.
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [listResults, requestedDocId])
+
     if (statsLoading) {
         return (
             <div className="flex-1 flex items-center justify-center">
@@ -268,248 +493,277 @@ export function HomePage() {
 
     return (
         <PanelGroup direction="horizontal" className="h-full">
-            {/* Left Panel - Search & Results */}
-            <Panel defaultSize={40} minSize={30} maxSize={60}>
-                <div className="flex flex-col h-full border-r">
-                    {/* Mode Toggle */}
-                    <div className="flex items-center border-b bg-card/30">
-                        <button
-                            onClick={() => handleModeChange('search')}
-                            className={cn(
-                                "flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-medium transition-colors border-b-2",
-                                mode === 'search'
-                                    ? "border-primary text-primary"
-                                    : "border-transparent text-muted-foreground hover:text-foreground"
-                            )}
-                        >
-                            <Search className="h-3.5 w-3.5" />
-                            {t('home.search')}
-                        </button>
-                        <button
-                            onClick={() => handleModeChange('browse')}
-                            className={cn(
-                                "flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-medium transition-colors border-b-2",
-                                mode === 'browse'
-                                    ? "border-primary text-primary"
-                                    : "border-transparent text-muted-foreground hover:text-foreground"
-                            )}
-                        >
-                            <Layers className="h-3.5 w-3.5" />
-                            {t('home.browse')}
-                        </button>
-                    </div>
-
-                    {/* ════════ SEARCH MODE ════════ */}
-                    {mode === 'search' && (
-                        <>
-                            <div className="p-4 border-b bg-card/30">
-                                <SearchBar
-                                    onSearch={handleSearch}
-                                    isLoading={isLoading}
-                                    disabled={!hasDocuments}
-                                    initialQuery={queryParam?.trim() || ''}
-                                    initialFileTypes={searchParams.get('types')?.split(',').map((s) => s.trim()).filter(Boolean)}
-                                />
+            <Panel defaultSize={50} minSize={35} maxSize={65}>
+                <PanelGroup direction="horizontal" className="h-full">
+                    <Panel defaultSize={34} minSize={24} maxSize={45}>
+                        <div className="h-full flex flex-col border-r bg-card/20">
+                            <div className="p-3 border-b bg-card/40">
+                                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t('home.search')} & {t('browse.title')}</p>
+                                <p className="text-sm font-semibold mt-1">{selectedProject?.name}</p>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                    {browse.total.toLocaleString()} {t('common.documents')}
+                                </p>
                             </div>
 
-                            {lastQuery && error && (
-                                <div className="shrink-0 px-4 py-2 bg-destructive/10 text-destructive text-sm flex items-center justify-between gap-2 border-b">
-                                    <span>{error}</span>
-                                    <Button variant="outline" size="sm" onClick={retry} className="shrink-0">
-                                        {t('home.retry')}
-                                    </Button>
-                                </div>
-                            )}
-
-                            {loadMoreError && (
-                                <div className="shrink-0 px-4 py-2 bg-amber-500/10 text-amber-500 text-sm flex items-center justify-between gap-2 border-b">
-                                    <span>{t('common.loadMoreError')}</span>
-                                    <Button variant="outline" size="sm" onClick={loadMore} className="shrink-0">
-                                        {t('common.retry')}
-                                    </Button>
-                                </div>
-                            )}
-
-                            {/* Advanced Scan button when ≤ 20 results */}
-                            {lastQuery && !isLoading && totalResults > 0 && totalResults <= 20 && (
-                                <div className="shrink-0 px-4 py-2 border-b bg-amber-500/5">
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className="w-full border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
-                                        disabled={batchScanStatus === 'loading' || batchScanStatus === 'triggered'}
-                                        onClick={async () => {
-                                            setBatchScanStatus('loading')
-                                            try {
-                                                const ids = results.map(r => r.document_id)
-                                                const resp = await triggerBatchDeepAnalysis(ids)
-                                                setBatchScanStatus(resp.status === 'all_completed' ? 'complete' : 'triggered')
-                                            } catch {
-                                                setBatchScanStatus('idle')
-                                            }
-                                        }}
-                                    >
-                                        {batchScanStatus === 'loading' ? t('deepAnalysis.scanning') :
-                                         batchScanStatus === 'triggered' ? t('deepAnalysis.batchTriggered').replace('{count}', String(totalResults)) :
-                                         batchScanStatus === 'complete' ? t('deepAnalysis.batchComplete') :
-                                         t('deepAnalysis.advancedScan')}
-                                    </Button>
-                                    {batchScanStatus === 'idle' && (
-                                        <p className="text-xs text-muted-foreground mt-1 text-center">
-                                            {t('deepAnalysis.advancedScanDesc').replace('{count}', String(totalResults))}
-                                        </p>
-                                    )}
-                                </div>
-                            )}
-
-                            {/* Search Results or Start panel */}
-                            <div className="flex-1 overflow-hidden">
-                                {!lastQuery && !isLoading ? (
-                                    <SearchStartPanel
-                                        onSearch={(q) =>
-                                            handleSearch(q, 0.5, selectedProject?.path)
-                                        }
-                                    />
-                                ) : (
-                                    <ResultList
-                                        results={results}
-                                        selectedId={selectedResult?.document_id ?? null}
-                                        onSelect={handleSelectResult}
-                                        totalResults={totalResults}
-                                        processingTime={processingTime}
-                                        isLoading={isLoading}
-                                        onLoadMore={loadMore}
-                                        hasMore={hasMore}
-                                        isLoadingMore={isLoadingMore}
-                                    />
-                                )}
-                            </div>
-                        </>
-                    )}
-
-                    {/* ════════ BROWSE MODE ════════ */}
-                    {mode === 'browse' && (
-                        <>
-                            {/* Browse Filter Bar */}
-                            <div className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b bg-card/30">
-                                {/* Filter search */}
-                                <div className="relative flex items-center">
-                                    <Search className="absolute left-2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-                                    <Input
-                                        placeholder={t('browse.searchPlaceholder')}
-                                        value={browseSearchInput}
-                                        onChange={(e) => setBrowseSearchInput(e.target.value)}
-                                        className="pl-7 pr-7 h-7 w-40 text-xs"
-                                    />
-                                    {browseSearchInput && (
+                            <div className="flex-1 overflow-auto p-3 space-y-3">
+                                <section className="rounded-lg border bg-card/40 p-3 space-y-3">
+                                    <div className="inline-flex w-full rounded-md bg-muted p-1">
                                         <button
-                                            onClick={() => { setBrowseSearchInput(''); browse.updateFilters({ search: undefined }) }}
-                                            className="absolute right-2 text-muted-foreground hover:text-foreground"
+                                            type="button"
+                                            onClick={() => handleQueryModeChange('filename')}
+                                            className={cn(
+                                                'flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors',
+                                                queryMode === 'filename'
+                                                    ? 'bg-background text-foreground shadow-sm'
+                                                    : 'text-muted-foreground hover:text-foreground'
+                                            )}
                                         >
-                                            <X className="h-3 w-3" />
+                                            {t('home.browse')}
                                         </button>
-                                    )}
-                                </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleQueryModeChange('content')}
+                                            className={cn(
+                                                'flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors',
+                                                queryMode === 'content'
+                                                    ? 'bg-background text-foreground shadow-sm'
+                                                    : 'text-muted-foreground hover:text-foreground'
+                                            )}
+                                        >
+                                            {t('home.search')}
+                                        </button>
+                                    </div>
 
-                                {/* File Type Chips */}
-                                <div className="flex items-center gap-1">
-                                    {FILE_TYPE_CONFIG.map(({ type, label, icon: Icon, color }) => {
-                                        const isActive = activeFileTypes.includes(type)
-                                        return (
+                                    <form onSubmit={handleSubmit} className="space-y-2">
+                                        <div className="relative">
+                                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                                            <Input
+                                                placeholder={
+                                                    queryMode === 'content'
+                                                        ? t('searchBar.placeholder')
+                                                        : t('browse.searchPlaceholder')
+                                                }
+                                                value={queryInput}
+                                                onChange={(e) => setQueryInput(e.target.value)}
+                                                className="pl-8 h-9 text-sm"
+                                            />
+                                        </div>
+                                        <Button type="submit" size="sm" className="w-full gap-1.5" disabled={queryMode === 'content' && isLoading}>
+                                            {queryMode === 'content' ? <Sparkles className="h-3.5 w-3.5" /> : <Filter className="h-3.5 w-3.5" />}
+                                            {queryMode === 'content' ? t('searchBar.search') : t('browse.title')}
+                                        </Button>
+                                    </form>
+
+                                    {queryMode === 'content' && (
+                                        <div className="space-y-2">
+                                            <p className="text-[11px] text-muted-foreground">{t('searchBar.semantic')}</p>
+                                            <div className="grid grid-cols-3 gap-1">
+                                                <Button
+                                                    size="sm"
+                                                    variant={semanticWeight === 0 ? 'default' : 'outline'}
+                                                    className="h-7 text-[11px]"
+                                                    onClick={() => handleSemanticModeChange(0)}
+                                                >
+                                                    <Zap className="h-3 w-3" />
+                                                </Button>
+                                                <Button
+                                                    size="sm"
+                                                    variant={semanticWeight === 0.5 ? 'default' : 'outline'}
+                                                    className="h-7 text-[11px]"
+                                                    onClick={() => handleSemanticModeChange(0.5)}
+                                                >
+                                                    {t('searchBar.hybrid')}
+                                                </Button>
+                                                <Button
+                                                    size="sm"
+                                                    variant={semanticWeight === 1 ? 'default' : 'outline'}
+                                                    className="h-7 text-[11px]"
+                                                    onClick={() => handleSemanticModeChange(1)}
+                                                >
+                                                    <Sparkles className="h-3 w-3" />
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </section>
+
+                                <section className="rounded-lg border bg-card/40 p-3 space-y-2">
+                                    <p className="text-xs font-medium text-muted-foreground">{t('searchBar.filterByType')}</p>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        <Button
+                                            variant={selectedFileTypes.length === 0 ? 'default' : 'outline'}
+                                            size="sm"
+                                            className="h-7 text-[11px]"
+                                            onClick={() => {
+                                                setSelectedFileTypes([])
+                                                updateTypesInUrl([])
+                                                if (queryMode === 'content' && activeContentQuery) {
+                                                    runContentSearch(activeContentQuery, semanticWeight, [])
+                                                }
+                                            }}
+                                        >
+                                            {t('searchBar.allTypes')}
+                                            <span className="text-[10px] tabular-nums opacity-75">
+                                                ({browse.total.toLocaleString()})
+                                            </span>
+                                        </Button>
+                                        {FILE_TYPE_CONFIG.map(({ type, label, icon: Icon, color }) => {
+                                            const isActive = selectedFileTypes.includes(type)
+                                            const typeCount = fileTypeCounts[type] ?? 0
+                                            return (
+                                                <Button
+                                                    key={type}
+                                                    variant={isActive ? 'default' : 'outline'}
+                                                    size="sm"
+                                                    className="h-7 text-[11px] gap-1"
+                                                    onClick={() => handleToggleFileType(type)}
+                                                >
+                                                    <Icon className={cn('h-3 w-3', !isActive && color)} />
+                                                    {label}
+                                                    <span className="text-[10px] tabular-nums opacity-75">
+                                                        ({typeCount.toLocaleString()})
+                                                    </span>
+                                                </Button>
+                                            )
+                                        })}
+                                    </div>
+                                </section>
+
+                                <section className="rounded-lg border bg-card/40 p-3 space-y-2">
+                                    <div className="flex items-center justify-between">
+                                        <p className="text-xs font-medium text-muted-foreground">{t('browse.dateLabel')}</p>
+                                        {browse.filters.date_from && (
                                             <Button
-                                                key={type}
-                                                variant={isActive ? "default" : "outline"}
+                                                variant="ghost"
                                                 size="sm"
-                                                onClick={() => browse.toggleFileType(type)}
-                                                className={cn("gap-1 h-7 text-[11px] px-2", isActive && "bg-primary")}
+                                                className="h-6 px-2 text-[11px]"
+                                                onClick={() => browse.setDateRange(undefined, undefined)}
                                             >
-                                                <Icon className={cn("h-3 w-3", !isActive && color)} />
+                                                × {t('browse.clearDate')}
+                                            </Button>
+                                        )}
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-1">
+                                        {DATE_PRESETS.map(({ label, days }) => (
+                                            <Button
+                                                key={days}
+                                                variant="outline"
+                                                size="sm"
+                                                className="h-7 text-[11px]"
+                                                onClick={() => handleDatePreset(days)}
+                                            >
+                                                <Calendar className="h-3 w-3 mr-1" />
                                                 {label}
                                             </Button>
-                                        )
-                                    })}
-                                </div>
-                            </div>
-
-                            {/* Second filter row — date + sort */}
-                            <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-b bg-card/20">
-                                {/* Date Presets */}
-                                <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                        <Button variant="outline" size="sm" className="gap-1 h-7 text-[11px]">
-                                            <Calendar className="h-3 w-3" />
-                                            {browse.filters.date_from ? t('browse.periodActive') : t('browse.dateLabel')}
-                                        </Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="start">
-                                        {DATE_PRESETS.map(({ label, days }) => (
-                                            <DropdownMenuItem key={days} onClick={() => handleDatePreset(days)}>
-                                                {label}
-                                            </DropdownMenuItem>
                                         ))}
-                                        {browse.filters.date_from && (
-                                            <DropdownMenuItem onClick={() => browse.setDateRange(undefined, undefined)}>
-                                                × {t('browse.clearDate')}
-                                            </DropdownMenuItem>
-                                        )}
-                                    </DropdownMenuContent>
-                                </DropdownMenu>
+                                    </div>
 
-                                {/* Sort */}
-                                <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                        <Button variant="outline" size="sm" className="gap-1 h-7 text-[11px]">
-                                            <SortDesc className="h-3 w-3" />
-                                            {currentSortLabel}
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <Button variant="outline" size="sm" className="w-full justify-start gap-1 h-7 text-[11px]">
+                                                <SortDesc className="h-3 w-3" />
+                                                {currentSortLabel}
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="start">
+                                            {SORT_OPTIONS.map(({ value, label }) => (
+                                                <DropdownMenuItem
+                                                    key={value}
+                                                    onClick={() => browse.setSortBy(value)}
+                                                    className={cn(browse.filters.sort_by === value && 'bg-accent')}
+                                                >
+                                                    {label}
+                                                </DropdownMenuItem>
+                                            ))}
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                </section>
+
+                                {queryMode === 'content' && activeContentQuery && !isLoading && totalResults > 0 && totalResults <= 20 && (
+                                    <section className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="w-full border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+                                            disabled={batchScanStatus === 'loading' || batchScanStatus === 'triggered'}
+                                            onClick={async () => {
+                                                setBatchScanStatus('loading')
+                                                try {
+                                                    const ids = results.map((r) => r.document_id)
+                                                    const resp = await triggerBatchDeepAnalysis(ids)
+                                                    setBatchScanStatus(resp.status === 'all_completed' ? 'complete' : 'triggered')
+                                                } catch {
+                                                    setBatchScanStatus('idle')
+                                                }
+                                            }}
+                                        >
+                                            {batchScanStatus === 'loading' ? t('deepAnalysis.scanning') :
+                                                batchScanStatus === 'triggered' ? t('deepAnalysis.batchTriggered').replace('{count}', String(totalResults)) :
+                                                    batchScanStatus === 'complete' ? t('deepAnalysis.batchComplete') :
+                                                        t('deepAnalysis.advancedScan')}
                                         </Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="start">
-                                        {SORT_OPTIONS.map(({ value, label }) => (
-                                            <DropdownMenuItem
-                                                key={value}
-                                                onClick={() => browse.setSortBy(value)}
-                                                className={cn(browse.filters.sort_by === value && "bg-accent")}
-                                            >
-                                                {label}
-                                            </DropdownMenuItem>
-                                        ))}
-                                    </DropdownMenuContent>
-                                </DropdownMenu>
-
-                                {/* Clear all */}
-                                {hasActiveFilters && (
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => { browse.clearFilters(); setBrowseSearchInput('') }}
-                                        className="h-7 text-[11px] text-muted-foreground"
-                                    >
-                                        × {t('browse.clearFilters')}
-                                    </Button>
+                                    </section>
                                 )}
 
-                                {/* Count */}
-                                <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
-                                    {browse.total.toLocaleString()} {t('common.documents')}
+                                {(error || loadMoreError) && (
+                                    <section className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive space-y-2">
+                                        {error && (
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span>{error}</span>
+                                                <Button variant="outline" size="sm" onClick={retry} className="h-7 px-2">
+                                                    {t('home.retry')}
+                                                </Button>
+                                            </div>
+                                        )}
+                                        {loadMoreError && <p>{t('common.loadMoreError')}</p>}
+                                    </section>
+                                )}
+
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={handleClearAll}
+                                    className="w-full h-8 text-xs text-muted-foreground"
+                                >
+                                    {t('browse.clearFilters')}
+                                </Button>
+                            </div>
+                        </div>
+                    </Panel>
+
+                    <PanelResizeHandle className="w-1 bg-border hover:bg-primary transition-colors" />
+
+                    <Panel defaultSize={66} minSize={45}>
+                        <div className="h-full flex flex-col">
+                            <div className="shrink-0 px-3 py-2 border-b bg-card/30 text-xs text-muted-foreground flex items-center justify-between gap-3">
+                                <span>
+                                    {usesBrowseDataset
+                                        ? `${browse.total.toLocaleString()} ${t('common.documents')}`
+                                        : `${totalResults.toLocaleString()} ${t('stats.searchResults')} · “${activeContentQuery}”`
+                                    }
                                 </span>
+                                {usesBrowseDataset && hasActiveFilters && (
+                                    <span className="text-[11px] text-primary">{t('browse.activeFilters').replace('{count}', String(activeFilterCount))}</span>
+                                )}
                             </div>
 
-                            {/* Browse Results */}
                             <div className="flex-1 overflow-hidden">
                                 <ResultList
-                                    results={browseResultsAsSearchResults}
+                                    results={listResults}
                                     selectedId={selectedResult?.document_id ?? null}
                                     onSelect={handleSelectResult}
-                                    totalResults={browse.total}
-                                    processingTime={0}
-                                    isLoading={browse.isLoading}
-                                    mode="browse"
+                                    totalResults={listTotalResults}
+                                    processingTime={listProcessingTime}
+                                    isLoading={listIsLoading}
+                                    mode={listMode}
                                     hasActiveFilters={hasActiveFilters}
+                                    onLoadMore={!usesBrowseDataset ? loadMore : undefined}
+                                    hasMore={!usesBrowseDataset ? hasMore : false}
+                                    isLoadingMore={!usesBrowseDataset ? isLoadingMore : false}
                                 />
                             </div>
 
-                            {/* Pagination */}
-                            {browse.total > currentLimit && (
+                            {usesBrowseDataset && browse.total > currentLimit && (
                                 <div className="shrink-0 px-3 py-2 border-t bg-card/30 flex items-center justify-between text-sm">
                                     <span className="text-xs text-muted-foreground">
                                         {currentSkip + 1}–{Math.min(currentSkip + currentLimit, browse.total)} {t('home.of')} {browse.total.toLocaleString()}
@@ -536,28 +790,23 @@ export function HomePage() {
                                     </div>
                                 </div>
                             )}
-                        </>
-                    )}
-                </div>
+                        </div>
+                    </Panel>
+                </PanelGroup>
             </Panel>
 
             <PanelResizeHandle className="w-1 bg-border hover:bg-primary transition-colors" />
 
-            {/* Right Panel - Document Viewer or Stats */}
-            <Panel defaultSize={60} minSize={40}>
+            <Panel defaultSize={50} minSize={35}>
                 <div className="h-full bg-card/20">
-                    {selectedDocumentId ? (
-                        <DocumentViewer
-                            documentId={selectedDocumentId}
-                            searchQuery={mode === 'search' ? lastQuery : undefined}
-                            onNavigatePrevious={navigateToPreviousDocument}
-                            onNavigateNext={navigateToNextDocument}
-                            canNavigatePrevious={canNavigatePrevious}
-                            canNavigateNext={canNavigateNext}
-                        />
-                    ) : (
-                        <SearchStatsPanel results={results} totalResults={totalResults} lastQuery={lastQuery} />
-                    )}
+                    <DocumentViewer
+                        documentId={selectedDocumentId}
+                        searchQuery={isContentSearchActive ? activeContentQuery : undefined}
+                        onNavigatePrevious={navigateToPreviousDocument}
+                        onNavigateNext={navigateToNextDocument}
+                        canNavigatePrevious={canNavigatePrevious}
+                        canNavigateNext={canNavigateNext}
+                    />
                 </div>
             </Panel>
         </PanelGroup>

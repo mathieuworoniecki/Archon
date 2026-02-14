@@ -28,6 +28,8 @@ def _run_migrations():
         ("documents", "archive_path", "ALTER TABLE documents ADD COLUMN archive_path VARCHAR(1024)"),
         ("documents", "hash_md5", "ALTER TABLE documents ADD COLUMN hash_md5 VARCHAR(32)"),
         ("documents", "hash_sha256", "ALTER TABLE documents ADD COLUMN hash_sha256 VARCHAR(64)"),
+        ("documents", "redaction_status", "ALTER TABLE documents ADD COLUMN redaction_status VARCHAR(20)"),
+        ("documents", "redaction_score", "ALTER TABLE documents ADD COLUMN redaction_score FLOAT"),
         ("audit_logs", "entry_hash", "ALTER TABLE audit_logs ADD COLUMN entry_hash VARCHAR(64)"),
         ("audit_logs", "previous_hash", "ALTER TABLE audit_logs ADD COLUMN previous_hash VARCHAR(64)"),
     ]

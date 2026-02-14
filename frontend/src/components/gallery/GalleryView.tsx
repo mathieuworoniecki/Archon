@@ -3,9 +3,10 @@ import { Grid, List, Play, Image as ImageIcon, ZoomIn, ZoomOut, Filter, HardDriv
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { cn } from '@/lib/utils'
-import { Document, API_BASE, getDocumentFileUrl } from '@/lib/api'
+import { Document, getDocumentFileUrl, getDocumentThumbnailUrl } from '@/lib/api'
 import { MediaViewer } from './MediaViewer'
 import { useTranslation } from '@/contexts/I18nContext'
+import { isLikelyMediaDocument, isVideoFileName } from '@/lib/media'
 
 interface GalleryViewProps {
     documents: Document[]
@@ -28,15 +29,11 @@ export function GalleryView({ documents, onSelectDocument, className }: GalleryV
 
     // Filter only media files
     const mediaDocuments = useMemo(() => {
-        return documents.filter(doc => {
-            const fileName = doc.file_name.toLowerCase()
-            return doc.file_type === 'image' || 
-                   fileName.match(/\.(jpg|jpeg|png|gif|webp|bmp|mp4|webm|mov|avi)$/i)
-        })
+        return documents.filter((doc) => isLikelyMediaDocument(doc))
     }, [documents])
 
     const isVideo = (doc: Document) => {
-        return doc.file_name.toLowerCase().match(/\.(mp4|webm|mov|avi)$/i)
+        return doc.file_type === 'video' || isVideoFileName(doc.file_name)
     }
 
     // Apply filters
@@ -63,7 +60,7 @@ export function GalleryView({ documents, onSelectDocument, className }: GalleryV
     }, [mediaDocuments, mediaFilter, sizeFilter])
 
     const getThumbnailUrl = (docItem: Document) => {
-        return `${API_BASE}/documents/${docItem.id}/thumbnail`
+        return getDocumentThumbnailUrl(docItem.id)
     }
 
     const handleClick = (_doc: Document, index: number) => {

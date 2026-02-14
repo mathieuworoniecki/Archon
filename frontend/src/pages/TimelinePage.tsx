@@ -1,6 +1,6 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Calendar, Clock, FileText, Activity, ArrowRight, ChevronsRight, FolderOpen, RefreshCw, ZoomIn, ZoomOut, ChevronRight } from 'lucide-react'
+import { Calendar, Clock, FileText, Activity, ArrowRight, ChevronsRight, FolderOpen, ZoomOut, ChevronRight } from 'lucide-react'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -77,6 +77,13 @@ export function TimelinePage() {
     const canZoomIn = GRANULARITY_ORDER.indexOf(currentGranularity) < GRANULARITY_ORDER.length - 1
     const canZoomOut = zoomStack.length > 0
 
+    // Keep decade pin only at year-level; drilling into month/day clears it.
+    useEffect(() => {
+        if (currentGranularity !== 'year' && activeDecade !== null) {
+            setActiveDecade(null)
+        }
+    }, [activeDecade, currentGranularity])
+
     // Handle bar click → drill down
     const handleDateClick = useCallback((date: string) => {
         if (canZoomIn) {
@@ -132,13 +139,9 @@ export function TimelinePage() {
     }, [])
 
     const handleDecadeClick = useCallback((decade: number) => {
-        setActiveDecade((prev) => {
-            const next = prev === decade ? null : decade
-            // Keep state deterministic: deselect clears date, select pins decade start.
-            setZoomStack([])
-            setSelectedDate(next === null ? null : `${decade}-01`)
-            return next
-        })
+        setZoomStack([])
+        setSelectedDate(null)
+        setActiveDecade((prev) => (prev === decade ? null : decade))
     }, [])
 
     const handleGoToAnalysis = () => {
@@ -146,6 +149,19 @@ export function TimelinePage() {
             navigate(`/cockpit?date=${encodeURIComponent(selectedDate)}`)
         }
     }
+
+    const decadeDateFrom = useMemo(() => {
+        if (currentGranularity !== 'year' || activeDecade === null) return undefined
+        return `${activeDecade}-01`
+    }, [activeDecade, currentGranularity])
+
+    const decadeDateTo = useMemo(() => {
+        if (currentGranularity !== 'year' || activeDecade === null) return undefined
+        return `${activeDecade + 9}-12`
+    }, [activeDecade, currentGranularity])
+
+    const effectiveDateFrom = currentZoom?.dateFrom ?? decadeDateFrom
+    const effectiveDateTo = currentZoom?.dateTo ?? decadeDateTo
 
     return (
         <div className="h-full p-6 overflow-auto">
@@ -259,15 +275,6 @@ export function TimelinePage() {
                         <span className="text-[10px] text-muted-foreground w-14 text-center font-medium uppercase">
                             {currentGranularity === 'year' ? t('timeline.byYear') : currentGranularity === 'month' ? t('timeline.byMonth') : t('timeline.byDay')}
                         </span>
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            disabled={!canZoomIn}
-                            title={t('timeline.zoomIn')}
-                        >
-                            <ZoomIn className="h-3.5 w-3.5" />
-                        </Button>
                     </div>
                 </div>
 
@@ -329,24 +336,20 @@ export function TimelinePage() {
                         </CardTitle>
                     </CardHeader>
                     <CardContent>
-                        {isLoading ? (
-                            <div className="h-48"><TimelineSkeleton /></div>
-                        ) : error ? (
-                            <div className="h-48 flex flex-col items-center justify-center gap-3 text-red-500">
-                                <p className="text-sm">{t('timeline.error')}: {error}</p>
-                                <Button variant="outline" size="sm" onClick={refetch} className="gap-1.5">
-                                    <RefreshCw className="h-3.5 w-3.5" />
-                                    {t('common.retry')}
-                                </Button>
-                            </div>
-                        ) : (
-                            <TimelineHeatmap 
-                                granularity={currentGranularity}
-                                onDateSelect={handleDateClick}
-                                dateFrom={currentZoom?.dateFrom}
-                                dateTo={currentZoom?.dateTo}
-                            />
+                        {isLoading && (
+                            <div className="h-48 mb-3"><TimelineSkeleton /></div>
                         )}
+                        <TimelineHeatmap 
+                            granularity={currentGranularity}
+                            dataPoints={data?.data}
+                            totalDocuments={totalDocuments}
+                            isLoading={isLoading}
+                            error={error}
+                            onRetry={refetch}
+                            onDateSelect={handleDateClick}
+                            dateFrom={effectiveDateFrom}
+                            dateTo={effectiveDateTo}
+                        />
                     </CardContent>
                 </Card>
                 )}

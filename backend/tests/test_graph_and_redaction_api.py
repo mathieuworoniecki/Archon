@@ -4,6 +4,7 @@ Tests for the Entity Graph Co-occurrence API endpoint.
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
+from app.models import Scan, ScanStatus, Document, DocumentType, Entity
 
 
 class TestEntityGraphEndpoint:
@@ -85,6 +86,57 @@ class TestEntityGraphEndpoint:
             assert "target" in edge
             assert "weight" in edge
             assert edge["weight"] >= 1
+
+    def test_graph_project_path_filter(self, client, admin_headers, db_session):
+        """Graph project_path filter scopes nodes/edges to the selected project."""
+        scan = Scan(
+            path="/documents",
+            status=ScanStatus.COMPLETED,
+            total_files=2,
+            processed_files=2,
+        )
+        db_session.add(scan)
+        db_session.flush()
+
+        doc_a = Document(
+            scan_id=scan.id,
+            file_path="/documents/proj-a/doc-a.txt",
+            file_name="doc-a.txt",
+            file_type=DocumentType.TEXT,
+            file_size=10,
+            text_content="Alice works at Acme",
+        )
+        doc_b = Document(
+            scan_id=scan.id,
+            file_path="/documents/proj-b/doc-b.txt",
+            file_name="doc-b.txt",
+            file_type=DocumentType.TEXT,
+            file_size=10,
+            text_content="Bob works at Beta",
+        )
+        db_session.add_all([doc_a, doc_b])
+        db_session.flush()
+
+        db_session.add_all([
+            Entity(document_id=doc_a.id, text="Alice", type="PER", count=1),
+            Entity(document_id=doc_a.id, text="Acme", type="ORG", count=1),
+            Entity(document_id=doc_b.id, text="Bob", type="PER", count=1),
+            Entity(document_id=doc_b.id, text="Beta", type="ORG", count=1),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            "/api/entities/graph?project_path=/documents/proj-a&min_count=1&limit=30",
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+
+        data = resp.json()
+        node_ids = {node["id"] for node in data["nodes"]}
+        assert "PER:Alice" in node_ids
+        assert "ORG:Acme" in node_ids
+        assert "PER:Bob" not in node_ids
+        assert "ORG:Beta" not in node_ids
 
 
 class TestRedactionScanEndpoint:

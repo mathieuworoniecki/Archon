@@ -1,5 +1,5 @@
 import { createBrowserRouter, RouterProvider, Outlet, Link, useLocation, useNavigate, useSearchParams, Navigate } from 'react-router-dom'
-import { Shield, Github, Activity, FileText, Search, Star, Scan, Sparkles, Calendar, Image as ImageIcon, Sun, Moon, Languages, LogOut, FolderOpen, Users, Network, ScrollText, BellRing, CheckSquare } from 'lucide-react'
+import { Shield, Github, Activity, FileText, Search, Star, Scan, Sparkles, Calendar, Image as ImageIcon, Sun, Moon, LogOut, FolderOpen, Users, Network, ScrollText, BellRing, CheckSquare } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useStats } from '@/hooks/useStats'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
@@ -48,7 +48,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <>{children}</>
 }
 
-// Redirect /analysis?q=... → /?q=...  or /analysis?date=... → /?date=...&mode=browse
+// Redirect /analysis?q=... → /?q=...  or /analysis?date=... → /?date=...
 function AnalysisRedirect() {
     const [searchParams] = useSearchParams()
     const target = new URLSearchParams()
@@ -56,7 +56,7 @@ function AnalysisRedirect() {
     const date = searchParams.get('date')
     const doc = searchParams.get('doc')
     if (q) target.set('q', q)
-    if (date) { target.set('date', date); target.set('mode', 'browse') }
+    if (date) target.set('date', date)
     if (doc) target.set('doc', doc)
     const qs = target.toString()
     return <Navigate to={qs ? `/?${qs}` : '/'} replace />
@@ -78,7 +78,7 @@ function RootLayout() {
     const navigate = useNavigate()
     const { theme, toggleTheme } = useTheme()
     const { t, locale, setLocale } = useTranslation()
-    const { selectedProject, clearProject } = useProject()
+    const { selectedProject } = useProject()
     const [isPaletteOpen, setIsPaletteOpen] = useState(false)
     const mainContentRef = useRef<HTMLElement>(null)
     const lastFocusedLocationKeyRef = useRef(location.key)
@@ -217,17 +217,6 @@ function RootLayout() {
                 <div className="container mx-auto px-4 h-14 flex items-center justify-between">
                     <div className="flex items-center gap-5">
                         <div className="flex items-center gap-2.5">
-                            {/* Back to projects button */}
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="gap-1.5 h-8 text-xs text-muted-foreground hover:text-foreground"
-                                onClick={() => { clearProject(); navigate('/projects') }}
-                            >
-                                <FolderOpen className="h-3.5 w-3.5" />
-                                {t('nav.changeProject')}
-                            </Button>
-                            <div className="w-px h-5 bg-[rgba(255,255,255,0.08)]" />
                             <Link to="/" className="flex items-center gap-2.5">
                                 <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[rgba(245,158,11,0.1)] border border-[rgba(245,158,11,0.2)]">
                                     <Shield className="h-5 w-5 text-[#F59E0B]" />
@@ -266,44 +255,58 @@ function RootLayout() {
                         </nav>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                         {/* Stats display */}
                         {hasDocuments && stats && (
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-data">
+                            <div className="hidden xl:flex items-center gap-1.5 h-7 rounded-md border border-[rgba(255,255,255,0.08)] bg-[rgba(22,27,34,0.45)] px-2 text-xs text-muted-foreground font-data">
                                 <FileText className="h-3.5 w-3.5" />
                                 <span>{formatDocumentCount(stats.total_documents)} {t('header.docs')}</span>
                             </div>
                         )}
 
-                        <Link to="/scans">
-                            <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs">
-                                <Scan className="h-3 w-3" />
-                                {t('nav.scans')}
+                        <div className="flex items-center rounded-lg border border-[rgba(255,255,255,0.08)] bg-[rgba(22,27,34,0.55)] p-0.5">
+                            <Link to="/projects">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                    title={t('nav.changeProject')}
+                                >
+                                    <FolderOpen className="h-3.5 w-3.5" />
+                                </Button>
+                            </Link>
+                            <div className="w-px h-4 bg-[rgba(255,255,255,0.12)] mx-0.5" />
+                            <Link to="/scans">
+                                <Button variant="ghost" size="sm" className="gap-1 h-7 px-2 text-xs text-muted-foreground hover:text-foreground">
+                                    <Scan className="h-3 w-3" />
+                                    <span className="hidden sm:inline">{t('nav.scans')}</span>
+                                </Button>
+                            </Link>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                onClick={toggleTheme}
+                                title={theme === 'dark' ? t('header.lightMode') : t('header.darkMode')}
+                            >
+                                {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
                             </Button>
-                        </Link>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 w-7 p-0"
-                            onClick={toggleTheme}
-                            title={theme === 'dark' ? t('header.lightMode') : t('header.darkMode')}
-                        >
-                            {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-1.5 text-xs gap-1"
-                            onClick={() => setLocale(locale === 'fr' ? 'en' : 'fr')}
-                            title={locale === 'fr' ? 'English' : 'Français'}
-                        >
-                            <Languages className="h-3.5 w-3.5" />
-                            {locale.toUpperCase()}
-                        </Button>
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                            <Activity className="h-3 w-3 text-green-500" />
-                            <span>{getUser()?.username || t('header.connected')}</span>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 px-2 text-[10px] font-semibold tracking-wide text-muted-foreground hover:text-foreground"
+                                onClick={() => setLocale(locale === 'fr' ? 'en' : 'fr')}
+                                title={locale === 'fr' ? 'English' : 'Français'}
+                            >
+                                {locale.toUpperCase()}
+                            </Button>
                         </div>
+
+                        <div className="hidden md:flex items-center gap-1.5 h-7 rounded-md border border-[rgba(255,255,255,0.08)] bg-[rgba(22,27,34,0.45)] px-2 text-xs text-muted-foreground">
+                            <Activity className="h-3 w-3 text-green-500" />
+                            <span className="max-w-[140px] truncate">{getUser()?.username || t('header.connected')}</span>
+                        </div>
+
                         <Button
                             variant="ghost"
                             size="sm"

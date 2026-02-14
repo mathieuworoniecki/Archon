@@ -3,11 +3,13 @@ import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/contexts/I18nContext'
+import { formatEstimatedNumber } from '@/lib/formatters'
 
 export interface ProjectSelectorItem {
     name: string
     path: string
     file_count: number
+    file_count_estimated?: boolean
     total_size_bytes: number
     last_modified: string | null
     subdirectories: number
@@ -104,7 +106,7 @@ export function ProjectSelector({
                                     <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
                                         <span className="flex items-center gap-1">
                                             <FileText className="h-3.5 w-3.5" />
-                                            {project.file_count} {t('projects.files')}
+                                            {formatEstimatedNumber(project.file_count, project.file_count_estimated)} {t('projects.files')}
                                         </span>
                                         <span>{formatBytes(project.total_size_bytes)}</span>
                                         {project.last_modified && (

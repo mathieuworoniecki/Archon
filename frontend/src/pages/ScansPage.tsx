@@ -34,7 +34,7 @@ import { useTranslation } from '@/contexts/I18nContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { authFetch } from '@/lib/auth'
 import { toast } from 'sonner'
-import { formatDuration, formatNumber } from '@/lib/formatters'
+import { formatDuration, formatEstimatedNumber, formatNumber } from '@/lib/formatters'
 
 const DELETE_DELAY_MS = 5000
 
@@ -744,7 +744,7 @@ export function ScansPage() {
                                                             <FolderSearch className="h-4 w-4" />
                                                             {project.name}
                                                             <span className="text-xs text-muted-foreground">
-                                                                ({formatNumber(project.file_count)} {t('scans.filesCount')})
+                                                                ({formatEstimatedNumber(project.file_count, project.file_count_estimated)} {t('scans.filesCount')})
                                                             </span>
                                                         </span>
                                                     </SelectItem>

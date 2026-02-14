@@ -63,12 +63,14 @@ def get_timeline_aggregation(
         "year": "YYYY",
     }
     date_format = granularity_formats[granularity]
-    
-    # PostgreSQL date grouping using func.to_char
-    date_key = func.to_char(Document.file_modified_at, date_format).label("date_key")
+
+    # Use file_modified_at when available, otherwise fallback to indexed_at.
+    # This keeps timeline useful for datasets with missing filesystem metadata.
+    source_date = func.coalesce(Document.file_modified_at, Document.indexed_at)
+    date_key = func.to_char(source_date, date_format).label("date_key")
     
     # Base filter conditions
-    base_filters = [Document.file_modified_at.isnot(None)]
+    base_filters = [source_date.isnot(None)]
     if scan_id:
         base_filters.append(Document.scan_id == scan_id)
     if project_path:
@@ -80,9 +82,9 @@ def get_timeline_aggregation(
             )
         )
     if date_from:
-        base_filters.append(cast(Document.file_modified_at, Date) >= date_from)
+        base_filters.append(cast(source_date, Date) >= date_from)
     if date_to:
-        base_filters.append(cast(Document.file_modified_at, Date) <= date_to)
+        base_filters.append(cast(source_date, Date) <= date_to)
     
     # Query 1: Get total count per date bucket
     totals_query = (
@@ -99,7 +101,7 @@ def get_timeline_aggregation(
     # Query 2: Get count per date bucket + file type breakdown
     type_query = (
         db.query(
-            func.to_char(Document.file_modified_at, date_format).label("date_key"),
+            func.to_char(source_date, date_format).label("date_key"),
             Document.file_type,
             func.count(Document.id).label("type_count")
         )
@@ -150,11 +152,12 @@ def get_timeline_range(
     
     Returns the earliest and latest file_modified_at dates.
     """
+    source_date = func.coalesce(Document.file_modified_at, Document.indexed_at)
     query = db.query(
-        func.min(Document.file_modified_at).label("min_date"),
-        func.max(Document.file_modified_at).label("max_date"),
+        func.min(source_date).label("min_date"),
+        func.max(source_date).label("max_date"),
         func.count(Document.id).label("total_count")
-    )
+    ).filter(source_date.isnot(None))
     
     if scan_id:
         query = query.filter(Document.scan_id == scan_id)

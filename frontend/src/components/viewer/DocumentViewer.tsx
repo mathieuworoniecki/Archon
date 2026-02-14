@@ -13,6 +13,7 @@ import { useTranslation } from '@/contexts/I18nContext'
 import { DeepAnalysisPanel } from './DeepAnalysisPanel'
 import { useStats } from '@/hooks/useStats'
 import { useProject } from '@/contexts/ProjectContext'
+import { isImageFileName, isVideoFileName } from '@/lib/media'
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`
@@ -408,6 +409,9 @@ export function DocumentViewer({
     }
 
     const fileUrl = getDocumentFileUrl(documentId)
+    const isPdf = !!docInfo && (docInfo.file_type === 'pdf' || docInfo.file_name.toLowerCase().endsWith('.pdf'))
+    const isImageFile = !!docInfo && (docInfo.file_type === 'image' || isImageFileName(docInfo.file_name))
+    const isVideoFile = !!docInfo && (docInfo.file_type === 'video' || isVideoFileName(docInfo.file_name))
 
     const highlightText = (text: string, query: string) => {
         if (!query) return text
@@ -416,7 +420,7 @@ export function DocumentViewer({
     }
 
     // PDF Viewer
-    if (docInfo?.file_type === 'pdf') {
+    if (isPdf) {
         return (
             <div className="flex flex-col h-full">
                 {docInfo.file_path && <Breadcrumb filePath={docInfo.file_path} />}
@@ -503,7 +507,7 @@ export function DocumentViewer({
     }
 
     // Image Viewer
-    if (docInfo?.file_type === 'image') {
+    if (isImageFile) {
         return (
             <div className="flex flex-col h-full">
                 {docInfo.file_path && <Breadcrumb filePath={docInfo.file_path} />}
@@ -546,6 +550,42 @@ export function DocumentViewer({
                         />
                     </div>
                 </ScrollArea>
+            </div>
+        )
+    }
+
+    // Video Viewer
+    if (isVideoFile) {
+        return (
+            <div className="flex flex-col h-full">
+                {docInfo?.file_path && <Breadcrumb filePath={docInfo.file_path} />}
+                <div className="flex items-center justify-between p-2 border-b bg-card">
+                    <div className="flex items-center gap-2">
+                        {documentNavigationControls}
+                        <Video className="h-4 w-4" />
+                        <span className="text-sm font-medium">{docInfo?.file_name}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <RedactionBadge documentId={documentId} />
+                        <FavoriteButton documentId={documentId} size="sm" />
+                        <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={() => window.open(fileUrl, '_blank')}
+                        >
+                            <ExternalLink className="h-4 w-4" />
+                        </Button>
+                    </div>
+                </div>
+                <EntityPanel documentId={documentId} />
+                <DeepAnalysisPanel documentId={documentId} />
+                <div className="flex-1 flex items-center justify-center bg-black/30 p-4">
+                    <video
+                        src={fileUrl}
+                        controls
+                        className="max-h-full max-w-full rounded-lg shadow-xl"
+                    />
+                </div>
             </div>
         )
     }

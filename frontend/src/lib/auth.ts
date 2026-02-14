@@ -83,6 +83,13 @@ export function getAuthHeaders(): Record<string, string> {
     return { Authorization: `Bearer ${token}` }
 }
 
+export function withAuthTokenQuery(url: string): string {
+    const token = getToken()
+    if (!token) return url
+    const sep = url.includes('?') ? '&' : '?'
+    return `${url}${sep}access_token=${encodeURIComponent(token)}`
+}
+
 // ── Auth Fetch (wrapper) ────────────────────────────────
 
 export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {

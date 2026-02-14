@@ -1,5 +1,6 @@
 import { API_BASE, apiFetch, ensureOk } from './client'
 import type { BrowseFilters, Document, DocumentListResponse } from './types'
+import { withAuthTokenQuery } from '@/lib/auth'
 
 export async function getDocument(documentId: number): Promise<Document & { text_content: string }> {
     const response = await apiFetch(`${API_BASE}/documents/${documentId}`)
@@ -24,7 +25,13 @@ export async function getDocumentHighlights(documentId: number, query: string): 
 }
 
 export function getDocumentFileUrl(documentId: number): string {
-    return `${API_BASE}/documents/${documentId}/file`
+    return withAuthTokenQuery(`${API_BASE}/documents/${documentId}/file`)
+}
+
+export function getDocumentThumbnailUrl(documentId: number, size?: number): string {
+    const base = `${API_BASE}/documents/${documentId}/thumbnail`
+    const url = size ? `${base}?size=${size}` : base
+    return withAuthTokenQuery(url)
 }
 
 export async function getDocuments(filters?: BrowseFilters): Promise<DocumentListResponse> {
