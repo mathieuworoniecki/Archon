@@ -155,6 +155,17 @@ UX principale:
 - panneau central: liste des documents,
 - panneau droit: viewer/preview du document selectionne.
 
+### RAG (qualite, roadmap)
+
+La qualite RAG (grounding, retrieval, citations, evaluation) est pilotee en mode "docs-only":
+
+- `docs/rag_docs_index.md` (point d'entree)
+- `docs/rag_search_analysis.md` (etat actuel + priorites)
+- `docs/rag_search_execution_plan.md` (plan 90 jours / tickets)
+- `docs/rag_status_board.md` (suivi)
+- `docs/rag_decision_log.md` (decisions)
+- `docs/deep_dive_AnkitNayak-eth_EpsteinFiles-RAG.md` (deep dive externe: pratiques chunking/MMR/prompt)
+
 ## 8. Fichiers et dossiers importants
 
 ```text
@@ -167,6 +178,7 @@ Archon/
 │   ├── app/services/                # OCR, search, embeddings, NER, etc.
 │   ├── app/workers/                 # Celery tasks pipeline scan
 │   └── tests/                       # pytest backend
+├── docs/                             # specs + runbooks + plan RAG (docs-only)
 ├── frontend/
 │   ├── src/pages/                   # pages UI
 │   ├── src/components/              # composants
@@ -225,7 +237,7 @@ docker compose down -v
 cd frontend && npm ci && npm run lint && npm run build
 
 # Backend
-cd backend && python -m pytest tests/ -v --tb=short
+cd backend && python3 -m pytest tests/ -v --tb=short
 ```
 
 ## 11. Lancement sans Docker (optionnel)

@@ -53,3 +53,6 @@ AI.md
 .tmp_pages_functions.json
 AGENTS.md
 competitor_*.png
+
+# External repos (local only)
+.external/
