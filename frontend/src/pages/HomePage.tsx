@@ -48,6 +48,7 @@ const RECENT_SEARCHES_KEY = 'archon_recent_searches'
 const DOCUMENTS_LAYOUT_KEY = 'archon_documents_layout'
 const GRID_THUMB_SIZE_KEY = 'archon_grid_thumb_size'
 const SEARCH_PAGE_SIZE_KEY = 'archon_search_page_size'
+const DOCUMENTS_SIDEBAR_KEY = 'archon_documents_sidebar_visible'
 
 export function HomePage() {
     const navigate = useNavigate()
@@ -126,6 +127,16 @@ export function HomePage() {
             // ignore
         }
         return 50
+    })
+    const [isSidebarVisible, setIsSidebarVisible] = useState<boolean>(() => {
+        try {
+            const saved = localStorage.getItem(DOCUMENTS_SIDEBAR_KEY)
+            if (saved === '0') return false
+            if (saved === '1') return true
+        } catch {
+            // ignore
+        }
+        return true
     })
     const [semanticWeight, setSemanticWeight] = useState(0.5)
     const [selectedFileTypes, setSelectedFileTypes] = useState<FileType[]>(initialTypes)
@@ -212,6 +223,14 @@ export function HomePage() {
             // ignore
         }
     }, [searchPageSize])
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(DOCUMENTS_SIDEBAR_KEY, isSidebarVisible ? '1' : '0')
+        } catch {
+            // ignore
+        }
+    }, [isSidebarVisible])
 
     // Sync URL query back into UI state.
     useEffect(() => {
@@ -595,104 +614,106 @@ export function HomePage() {
     ])
 
     return (
-        <PanelGroup key={documentsLayout} direction="horizontal" className="h-full">
+        <PanelGroup key={`${documentsLayout}-${isSidebarVisible ? 'sidebar' : 'nosidebar'}`} direction="horizontal" className="h-full">
             <Panel
                 defaultSize={documentsLayout === 'grid' ? 100 : 50}
                 minSize={35}
                 maxSize={documentsLayout === 'grid' ? 100 : 65}
             >
                 <PanelGroup direction="horizontal" className="h-full">
-                    <Panel defaultSize={34} minSize={24} maxSize={45}>
-                        <div className="h-full flex flex-col border-r bg-card/20">
-                            <div className="p-3 border-b bg-card/40">
-                                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t('home.search')} & {t('browse.title')}</p>
-                                <p className="text-sm font-semibold mt-1">{selectedProject?.name}</p>
-                                <p className="text-xs text-muted-foreground mt-1">
-                                    {browse.total.toLocaleString()} {t('common.documents')}
-                                </p>
-                            </div>
-
-                            <div className="flex-1 overflow-auto p-3 space-y-3">
-                                <section className="rounded-lg border bg-card/40 p-3 space-y-3">
-                                    <div className="inline-flex w-full rounded-md bg-muted p-1">
-                                        <button
-                                            type="button"
-                                            onClick={() => handleQueryModeChange('filename')}
-                                            className={cn(
-                                                'flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors',
-                                                queryMode === 'filename'
-                                                    ? 'bg-background text-foreground shadow-sm'
-                                                    : 'text-muted-foreground hover:text-foreground'
-                                            )}
-                                        >
-                                            {t('home.browse')}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleQueryModeChange('content')}
-                                            className={cn(
-                                                'flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors',
-                                                queryMode === 'content'
-                                                    ? 'bg-background text-foreground shadow-sm'
-                                                    : 'text-muted-foreground hover:text-foreground'
-                                            )}
-                                        >
-                                            {t('home.search')}
-                                        </button>
+                    {isSidebarVisible && (
+                        <>
+                            <Panel defaultSize={34} minSize={24} maxSize={45}>
+                                <div className="h-full flex flex-col border-r bg-card/20">
+                                    <div className="p-3 border-b bg-card/40">
+                                        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t('home.search')} & {t('browse.title')}</p>
+                                        <p className="text-sm font-semibold mt-1">{selectedProject?.name}</p>
+                                        <p className="text-xs text-muted-foreground mt-1">
+                                            {browse.total.toLocaleString()} {t('common.documents')}
+                                        </p>
                                     </div>
 
-                                    <form onSubmit={handleSubmit} className="space-y-2">
-                                        <div className="relative">
-                                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-                                            <Input
-                                                placeholder={
-                                                    queryMode === 'content'
-                                                        ? t('searchBar.placeholder')
-                                                        : t('browse.searchPlaceholder')
-                                                }
-                                                value={queryInput}
-                                                onChange={(e) => setQueryInput(e.target.value)}
-                                                className="pl-8 h-9 text-sm"
-                                            />
-                                        </div>
-                                        <Button type="submit" size="sm" className="w-full gap-1.5" disabled={queryMode === 'content' && isLoading}>
-                                            {queryMode === 'content' ? <Sparkles className="h-3.5 w-3.5" /> : <Filter className="h-3.5 w-3.5" />}
-                                            {queryMode === 'content' ? t('searchBar.search') : t('browse.title')}
-                                        </Button>
-                                    </form>
-
-                                    {queryMode === 'content' && (
-                                        <div className="space-y-2">
-                                            <p className="text-[11px] text-muted-foreground">{t('searchBar.semantic')}</p>
-                                            <div className="grid grid-cols-3 gap-1">
-                                                <Button
-                                                    size="sm"
-                                                    variant={semanticWeight === 0 ? 'default' : 'outline'}
-                                                    className="h-7 text-[11px]"
-                                                    onClick={() => handleSemanticModeChange(0)}
+                                    <div className="flex-1 overflow-auto p-3 space-y-3">
+                                        <section className="rounded-lg border bg-card/40 p-3 space-y-3">
+                                            <div className="inline-flex w-full rounded-md bg-muted p-1">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleQueryModeChange('filename')}
+                                                    className={cn(
+                                                        'flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors',
+                                                        queryMode === 'filename'
+                                                            ? 'bg-background text-foreground shadow-sm'
+                                                            : 'text-muted-foreground hover:text-foreground'
+                                                    )}
                                                 >
-                                                    <Zap className="h-3 w-3" />
-                                                </Button>
-                                                <Button
-                                                    size="sm"
-                                                    variant={semanticWeight === 0.5 ? 'default' : 'outline'}
-                                                    className="h-7 text-[11px]"
-                                                    onClick={() => handleSemanticModeChange(0.5)}
+                                                    {t('home.browse')}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleQueryModeChange('content')}
+                                                    className={cn(
+                                                        'flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors',
+                                                        queryMode === 'content'
+                                                            ? 'bg-background text-foreground shadow-sm'
+                                                            : 'text-muted-foreground hover:text-foreground'
+                                                    )}
                                                 >
-                                                    {t('searchBar.hybrid')}
-                                                </Button>
-                                                <Button
-                                                    size="sm"
-                                                    variant={semanticWeight === 1 ? 'default' : 'outline'}
-                                                    className="h-7 text-[11px]"
-                                                    onClick={() => handleSemanticModeChange(1)}
-                                                >
-                                                    <Sparkles className="h-3 w-3" />
-                                                </Button>
+                                                    {t('home.search')}
+                                                </button>
                                             </div>
-                                        </div>
-                                    )}
-                                </section>
+
+                                            <form onSubmit={handleSubmit} className="space-y-2">
+                                                <div className="relative">
+                                                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                                                    <Input
+                                                        placeholder={
+                                                            queryMode === 'content'
+                                                                ? t('searchBar.placeholder')
+                                                                : t('browse.searchPlaceholder')
+                                                        }
+                                                        value={queryInput}
+                                                        onChange={(e) => setQueryInput(e.target.value)}
+                                                        className="pl-8 h-9 text-sm"
+                                                    />
+                                                </div>
+                                                <Button type="submit" size="sm" className="w-full gap-1.5" disabled={queryMode === 'content' && isLoading}>
+                                                    {queryMode === 'content' ? <Sparkles className="h-3.5 w-3.5" /> : <Filter className="h-3.5 w-3.5" />}
+                                                    {queryMode === 'content' ? t('searchBar.search') : t('browse.title')}
+                                                </Button>
+                                            </form>
+
+                                            {queryMode === 'content' && (
+                                                <div className="space-y-2">
+                                                    <p className="text-[11px] text-muted-foreground">{t('searchBar.semantic')}</p>
+                                                    <div className="grid grid-cols-3 gap-1">
+                                                        <Button
+                                                            size="sm"
+                                                            variant={semanticWeight === 0 ? 'default' : 'outline'}
+                                                            className="h-7 text-[11px]"
+                                                            onClick={() => handleSemanticModeChange(0)}
+                                                        >
+                                                            <Zap className="h-3 w-3" />
+                                                        </Button>
+                                                        <Button
+                                                            size="sm"
+                                                            variant={semanticWeight === 0.5 ? 'default' : 'outline'}
+                                                            className="h-7 text-[11px]"
+                                                            onClick={() => handleSemanticModeChange(0.5)}
+                                                        >
+                                                            {t('searchBar.hybrid')}
+                                                        </Button>
+                                                        <Button
+                                                            size="sm"
+                                                            variant={semanticWeight === 1 ? 'default' : 'outline'}
+                                                            className="h-7 text-[11px]"
+                                                            onClick={() => handleSemanticModeChange(1)}
+                                                        >
+                                                            <Sparkles className="h-3 w-3" />
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </section>
 
                                 <section className="rounded-lg border bg-card/40 p-3 space-y-2">
                                     <p className="text-xs font-medium text-muted-foreground">{t('searchBar.filterByType')}</p>
@@ -834,13 +855,15 @@ export function HomePage() {
                                 >
                                     {t('browse.clearFilters')}
                                 </Button>
-                            </div>
-                        </div>
-                    </Panel>
+                                    </div>
+                                </div>
+                            </Panel>
 
-                    <PanelResizeHandle className="w-1 bg-border hover:bg-primary transition-colors" />
+                            <PanelResizeHandle className="w-1 bg-border hover:bg-primary transition-colors" />
+                        </>
+                    )}
 
-                    <Panel defaultSize={66} minSize={45}>
+                    <Panel defaultSize={isSidebarVisible ? 66 : 100} minSize={45}>
                         <div className="h-full flex flex-col">
                             <div className="shrink-0 px-3 py-2 border-b bg-card/30 text-xs text-muted-foreground flex items-center justify-between gap-3">
                                 <div className="flex items-center gap-3 min-w-0">
@@ -858,6 +881,17 @@ export function HomePage() {
                                 </div>
 
                                 <div className="flex items-center gap-2">
+                                    <Button
+                                        variant={isSidebarVisible ? 'default' : 'outline'}
+                                        size="sm"
+                                        className="h-7 w-7 p-0"
+                                        onClick={() => setIsSidebarVisible((prev) => !prev)}
+                                        title={t('cockpit.filters')}
+                                        aria-label={t('cockpit.filters')}
+                                        aria-pressed={isSidebarVisible}
+                                    >
+                                        <Filter className="h-3.5 w-3.5" />
+                                    </Button>
                                     {documentsLayout === 'grid' && (
                                         <>
                                             <div className="hidden lg:flex items-center gap-2 w-40">
