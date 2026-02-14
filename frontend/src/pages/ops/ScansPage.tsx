@@ -35,6 +35,7 @@ import { useProject } from '@/contexts/ProjectContext'
 import { authFetch } from '@/lib/auth'
 import { toast } from 'sonner'
 import { formatDuration, formatEstimatedNumber, formatNumber } from '@/lib/formatters'
+import { ScanRowSkeleton } from '@/components/ui/skeleton'
 
 const DELETE_DELAY_MS = 5000
 
@@ -793,9 +794,10 @@ export function ScansPage() {
                     </CardHeader>
                     <CardContent>
                         {isLoading ? (
-                            <div className="text-center py-8 text-muted-foreground">
-                                <Loader2 className="h-6 w-6 mx-auto mb-2 animate-spin" />
-                                {t('scans.loading')}
+                            <div className="space-y-1">
+                                {Array.from({ length: 6 }).map((_, i) => (
+                                    <ScanRowSkeleton key={i} />
+                                ))}
                             </div>
                         ) : scans.length === 0 ? (
                             <div className="text-center py-8 text-muted-foreground">

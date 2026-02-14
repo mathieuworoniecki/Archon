@@ -8,6 +8,7 @@ import { authFetch } from '@/lib/auth'
 import { useTranslation } from '@/contexts/I18nContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { isLikelyVisualDocument } from '@/lib/media'
+import { GalleryGridSkeleton } from '@/components/ui/skeleton'
 
 const PAGE_SIZE = 50
 
@@ -214,8 +215,8 @@ export function GalleryPage() {
 
             {/* Gallery Content */}
             {isLoading ? (
-                <div className="flex-1 flex items-center justify-center">
-                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                <div className="flex-1 overflow-auto">
+                    <GalleryGridSkeleton />
                 </div>
             ) : (
                 <div className="flex-1 flex flex-col overflow-auto">
