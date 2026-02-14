@@ -475,6 +475,7 @@
     "fileTypes": "File types",
     "images": "Images",
     "text": "Text",
+    "emails": "Emails",
     "videos": "Videos",
     "ocrDesc": "Extract text from images/PDF (free, local)",
     "aiEmbeddings": "AI Embeddings",

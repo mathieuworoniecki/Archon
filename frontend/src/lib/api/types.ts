@@ -194,14 +194,18 @@ export interface InvestigationTask {
 
 export interface ScanEstimate {
     file_count: number
+    observed_file_count?: number
     size_mb: number
     type_counts: {
         pdf: number
         image: number
         text: number
         video: number
+        email: number
     }
     sampled: boolean
+    incomplete?: boolean
+    incomplete_reason?: string | null
     cached: boolean
     embedding_estimate: {
         estimated_tokens: number

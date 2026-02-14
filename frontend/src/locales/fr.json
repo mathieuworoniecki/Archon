@@ -475,6 +475,7 @@
     "fileTypes": "Types de fichiers",
     "images": "Images",
     "text": "Texte",
+    "emails": "Emails",
     "videos": "Vidéos",
     "ocrDesc": "Extraire texte des images/PDF (gratuit, local)",
     "aiEmbeddings": "Embeddings IA",

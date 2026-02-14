@@ -6,6 +6,9 @@ from typing import List, Optional
 import hashlib
 import threading
 from contextlib import contextmanager
+from collections import deque
+from pathlib import Path
+import itertools
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -18,6 +21,8 @@ from ..workers.celery_app import celery_app
 from ..workers.tasks import run_scan
 from ..utils.auth import get_current_user, require_role
 from ..utils.paths import normalize_scan_path
+from ..services.ocr import get_ocr_service, OCRService
+from ..config import get_settings
 from ..telemetry.request_context import get_request_id
 
 router = APIRouter(prefix="/scan", tags=["scan"])
@@ -83,6 +88,297 @@ def _scan_creation_lock(db: Session, normalized_path: str):
         yield
     finally:
         local_lock.release()
+
+
+def estimate_scan_directory(
+    root: Path,
+    ocr_service: OCRService,
+    *,
+    max_seconds: float = 5.0,
+    max_dirs: int = 10_000,
+    max_depth: int = 32,
+    max_stat_samples: int = 2_048,
+) -> dict:
+    """
+    Estimate scan-eligible file count + size + type distribution on very large trees.
+
+    Goals:
+    - remain responsive (<~5s) even for millions of files
+    - avoid severe under-estimation on leaf-heavy directory structures
+    - keep the estimate consistent with the scan discovery logic (ocr_service.detect_type)
+    """
+    import os
+    import time
+
+    start = time.monotonic()
+    deadline = start + max_seconds
+    bfs_deadline = start + (max_seconds * 0.75)
+
+    # Keep in sync with scan discovery filters.
+    ignored_dirs = {
+        ".git", "node_modules", "__pycache__", ".venv", "venv",
+        ".pytest_cache", ".mypy_cache",
+    }
+
+    visited_dirs = 0
+    deferred_depth_dirs = 0
+    deep_dirs_visited = 0
+    deep_subdirs = 0
+
+    observed_files = 0
+    observed_type_counts = {
+        "pdf": 0,
+        "image": 0,
+        "text": 0,
+        "video": 0,
+        "email": 0,
+    }
+
+    non_empty_dirs = 0
+    files_in_non_empty_dirs = 0
+
+    size_sample_sum = 0
+    size_sample_count = 0
+
+    sampled = False
+    sampled_reason: Optional[str] = None
+
+    queue: deque[tuple[Path, int]] = deque([(root, 0)])
+
+    while queue:
+        now = time.monotonic()
+        if now > bfs_deadline:
+            sampled = True
+            sampled_reason = sampled_reason or "max_time_reached"
+            break
+        if visited_dirs >= max_dirs:
+            sampled = True
+            sampled_reason = sampled_reason or "max_dirs_reached"
+            break
+
+        current_path, depth = queue.popleft()
+        visited_dirs += 1
+
+        dir_start_files = observed_files
+        local_subdirs = 0
+
+        try:
+            with os.scandir(current_path) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if name.startswith("."):
+                        continue
+
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if name in ignored_dirs:
+                                continue
+                            local_subdirs += 1
+                            if depth < max_depth:
+                                queue.append((Path(entry.path), depth + 1))
+                            else:
+                                deferred_depth_dirs += 1
+                                sampled = True
+                                sampled_reason = sampled_reason or "max_depth_reached"
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                    except (OSError, PermissionError):
+                        continue
+
+                    doc_type = ocr_service.detect_type(entry.path)
+                    if doc_type.value not in observed_type_counts:
+                        continue
+
+                    observed_files += 1
+                    observed_type_counts[doc_type.value] += 1
+
+                    should_stat = (
+                        size_sample_count < max_stat_samples
+                        and (observed_files <= 1024 or observed_files % 64 == 0)
+                    )
+                    if should_stat:
+                        try:
+                            size_sample_sum += entry.stat(follow_symlinks=False).st_size
+                            size_sample_count += 1
+                        except (OSError, PermissionError):
+                            pass
+        except (OSError, PermissionError):
+            continue
+
+        if depth >= 1:
+            deep_dirs_visited += 1
+            deep_subdirs += local_subdirs
+
+        eligible_delta = observed_files - dir_start_files
+        if eligible_delta > 0:
+            non_empty_dirs += 1
+            files_in_non_empty_dirs += eligible_delta
+
+    remaining_dirs = len(queue) + deferred_depth_dirs
+    estimated_total_dirs = visited_dirs + remaining_dirs
+
+    probe_dirs = 0
+    probe_files = 0
+    probe_subdirs = 0
+    probe_non_empty_dirs = 0
+    probe_files_in_non_empty_dirs = 0
+    probe_type_counts = {k: 0 for k in observed_type_counts}
+
+    # Probe a subset of unvisited directories to reduce underestimation on leaf-heavy trees.
+    if sampled and queue and time.monotonic() < deadline:
+        PROBE_SEEDS = 32
+        PROBE_MAX_DIRS = 192
+        PROBE_CHILDREN_PER_DIR = 8
+
+        probe_queue: deque[tuple[Path, int]] = deque()
+        left_budget = min(PROBE_SEEDS // 2, len(queue))
+        right_budget = min(PROBE_SEEDS - left_budget, len(queue) - left_budget)
+        for seed in itertools.islice(queue, left_budget):
+            probe_queue.append(seed)
+        if right_budget > 0:
+            for seed in itertools.islice(reversed(queue), right_budget):
+                probe_queue.append(seed)
+
+        while probe_queue and probe_dirs < PROBE_MAX_DIRS and time.monotonic() < deadline:
+            current_path, depth = probe_queue.popleft()
+            probe_dirs += 1
+
+            dir_start_probe_files = probe_files
+            local_subdirs = 0
+            child_dirs: list[Path] = []
+
+            try:
+                with os.scandir(current_path) as entries:
+                    for entry in entries:
+                        name = entry.name
+                        if name.startswith("."):
+                            continue
+
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                if name in ignored_dirs:
+                                    continue
+                                local_subdirs += 1
+                                if depth < max_depth and len(child_dirs) < PROBE_CHILDREN_PER_DIR:
+                                    child_dirs.append(Path(entry.path))
+                                continue
+                            if not entry.is_file(follow_symlinks=False):
+                                continue
+                        except (OSError, PermissionError):
+                            continue
+
+                        doc_type = ocr_service.detect_type(entry.path)
+                        if doc_type.value not in probe_type_counts:
+                            continue
+
+                        probe_files += 1
+                        probe_type_counts[doc_type.value] += 1
+
+                        should_stat = (
+                            size_sample_count < max_stat_samples
+                            and (probe_files <= 1024 or probe_files % 64 == 0)
+                        )
+                        if should_stat:
+                            try:
+                                size_sample_sum += entry.stat(follow_symlinks=False).st_size
+                                size_sample_count += 1
+                            except (OSError, PermissionError):
+                                pass
+
+            except (OSError, PermissionError):
+                continue
+
+            probe_subdirs += local_subdirs
+
+            eligible_delta = probe_files - dir_start_probe_files
+            if eligible_delta > 0:
+                probe_non_empty_dirs += 1
+                probe_files_in_non_empty_dirs += eligible_delta
+            elif child_dirs and time.monotonic() < deadline:
+                # Descend a bit to reach representative leaves.
+                for child in child_dirs:
+                    if probe_dirs + len(probe_queue) >= PROBE_MAX_DIRS:
+                        break
+                    probe_queue.append((child, depth + 1))
+
+    # Estimate undiscovered directory count using observed fanout.
+    branch_factor_bfs = (deep_subdirs / deep_dirs_visited) if deep_dirs_visited > 0 else 0.0
+    branch_factor_probe = (probe_subdirs / probe_dirs) if probe_dirs > 0 else 0.0
+    branch_factor = max(branch_factor_bfs, branch_factor_probe)
+    if sampled and remaining_dirs > 0 and branch_factor > 0:
+        if branch_factor < 1.0:
+            extra_dirs = int(remaining_dirs * (branch_factor / max(0.001, 1.0 - branch_factor)))
+        else:
+            damped = min(8.0, branch_factor + (branch_factor * branch_factor * 0.35))
+            extra_dirs = int(remaining_dirs * damped)
+        estimated_total_dirs += max(0, extra_dirs)
+
+    avg_files_per_dir = observed_files / max(1, visited_dirs)
+    avg_non_empty = (
+        files_in_non_empty_dirs / non_empty_dirs
+        if non_empty_dirs > 0
+        else avg_files_per_dir
+    )
+    bfs_density = max(
+        avg_files_per_dir,
+        (avg_files_per_dir * 0.7) + (avg_non_empty * 0.3),
+    )
+
+    density = bfs_density
+    if probe_dirs > 0:
+        probe_avg_files_per_dir = probe_files / max(1, probe_dirs)
+        probe_avg_non_empty = (
+            probe_files_in_non_empty_dirs / probe_non_empty_dirs
+            if probe_non_empty_dirs > 0
+            else probe_avg_files_per_dir
+        )
+        probe_density = max(
+            probe_avg_files_per_dir,
+            (probe_avg_files_per_dir * 0.7) + (probe_avg_non_empty * 0.3),
+        )
+        if bfs_density <= 0:
+            density = probe_density
+        else:
+            density = max(density, (bfs_density * 0.6) + (probe_density * 0.4))
+
+    estimated_files = observed_files
+    if sampled:
+        estimated_total_files = int(density * max(1, estimated_total_dirs))
+        lower_bound = observed_files + int(remaining_dirs * max(1.0, density * 0.25))
+        estimated_files = max(observed_files, estimated_total_files, lower_bound)
+
+    # Type distribution for extrapolated files uses observed+probe as the sample.
+    estimated_type_counts = dict(observed_type_counts)
+    extra_files = max(0, estimated_files - observed_files)
+    sample_type_counts = {k: observed_type_counts[k] + probe_type_counts.get(k, 0) for k in observed_type_counts}
+    sample_total = sum(sample_type_counts.values())
+    if extra_files > 0 and sample_total > 0:
+        weighted = {k: (sample_type_counts[k] / sample_total) * extra_files for k in sample_type_counts}
+        allocated = {k: int(weighted[k]) for k in weighted}
+        remainder = extra_files - sum(allocated.values())
+        if remainder > 0:
+            by_frac = sorted(weighted.items(), key=lambda kv: (kv[1] - int(kv[1])), reverse=True)
+            for i in range(remainder):
+                allocated[by_frac[i % len(by_frac)][0]] += 1
+        for k, v in allocated.items():
+            estimated_type_counts[k] += v
+
+    # Size estimate from sampled file stats.
+    size_bytes = 0
+    if size_sample_count > 0 and estimated_files > 0:
+        avg_size = size_sample_sum / size_sample_count
+        size_bytes = int(avg_size * estimated_files)
+
+    return {
+        "file_count": int(estimated_files),
+        "observed_file_count": int(observed_files),
+        "size_bytes": int(size_bytes),
+        "type_counts": estimated_type_counts,
+        "sampled": bool(sampled),
+        "incomplete_reason": sampled_reason,
+        "dirs_visited": int(visited_dirs),
+    }
 
 
 @router.post("/", response_model=ScanOut)
@@ -177,7 +473,8 @@ def estimate_scan(path: str, current_user: User = Depends(get_current_user)):
     # ========================================
     cache_key = f"scan_estimate:{hashlib.md5(root_signature.encode()).hexdigest()}"
     try:
-        r = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
+        settings = get_settings()
+        r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
         cached = r.get(cache_key)
         if cached:
             result = json.loads(cached)
@@ -187,103 +484,16 @@ def estimate_scan(path: str, current_user: User = Depends(get_current_user)):
         r = None  # Redis not available, continue without cache
     
     # ========================================
-    # 2. SINGLE PASS COUNT + SAMPLING (bounded)
+    # 2. FAST ESTIMATE (bounded) — consistent with scan discovery
     # ========================================
-    supported_extensions = {
-        '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp',
-        '.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.log',
-        '.mp4', '.webm', '.mov', '.avi', '.mkv'
-    }
+    ocr_service = get_ocr_service()
+    stats = estimate_scan_directory(target_path, ocr_service)
 
-    def categorize_ext(ext):
-        ext = ext.lower()
-        if ext == '.pdf':
-            return 'pdf'
-        if ext in {'.mp4', '.webm', '.mov', '.avi', '.mkv'}:
-            return 'video'
-        if ext in {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp'}:
-            return 'image'
-        if ext in {'.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.log'}:
-            return 'text'
-        return None
-    
-    file_count = 0
-    size_bytes = 0
-    type_counts = {"pdf": 0, "image": 0, "text": 0, "video": 0}
-    sample_count = 0
-    MAX_SAMPLE = 2000
-    MAX_ESTIMATE_SECONDS = 5.0
-    MAX_ESTIMATE_DIRS = 10_000
-    MAX_ESTIMATE_DEPTH = 32
-    ignored_dirs = {
-        ".git", "node_modules", "__pycache__", ".venv", "venv",
-        ".pytest_cache", ".mypy_cache",
-    }
-    estimate_start = time.monotonic()
-    visited_dirs = 0
-    incomplete = False
-    incomplete_reason = None
-
-    try:
-        for root, dirs, files in os.walk(target_path):
-            visited_dirs += 1
-            if visited_dirs > MAX_ESTIMATE_DIRS:
-                incomplete = True
-                incomplete_reason = "max_dirs_reached"
-                break
-            if time.monotonic() - estimate_start > MAX_ESTIMATE_SECONDS:
-                incomplete = True
-                incomplete_reason = "max_time_reached"
-                break
-
-            rel_root = os.path.relpath(root, target_path)
-            depth = 0 if rel_root == "." else rel_root.count(os.sep) + 1
-            if depth > MAX_ESTIMATE_DEPTH:
-                incomplete = True
-                incomplete_reason = "max_depth_reached"
-                dirs[:] = []
-                continue
-
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ignored_dirs]
-
-            for filename in files:
-                if filename.startswith('.'):
-                    continue
-
-                ext = os.path.splitext(filename)[1].lower()
-                if ext not in supported_extensions:
-                    continue
-
-                file_count += 1
-                cat = categorize_ext(ext)
-                if cat and sample_count < MAX_SAMPLE:
-                    type_counts[cat] += 1
-                    sample_count += 1
-
-                try:
-                    size_bytes += os.path.getsize(os.path.join(root, filename))
-                except OSError:
-                    pass
-
-                # Hard stop to avoid very long requests.
-                if file_count >= 2_000_000:
-                    incomplete = True
-                    incomplete_reason = "max_files_reached"
-                    break
-
-            if incomplete:
-                break
-
-    except Exception:
-        pass
-    
-    # ========================================
-    # 3. EXTRAPOLATE TYPE COUNTS
-    # ========================================
-    if sample_count > 0 and file_count > sample_count:
-        ratio = file_count / sample_count
-        for key in type_counts:
-            type_counts[key] = int(type_counts[key] * ratio)
+    file_count = int(stats["file_count"])
+    size_bytes = int(stats["size_bytes"])
+    type_counts = stats["type_counts"]
+    incomplete = bool(stats["sampled"])
+    incomplete_reason = stats.get("incomplete_reason")
     
     # ========================================
     # 4. CALCULATE COSTS
@@ -297,9 +507,11 @@ def estimate_scan(path: str, current_user: User = Depends(get_current_user)):
         "file_count": file_count,
         "size_mb": round(size_bytes / (1024 * 1024), 1),
         "type_counts": type_counts,
-        "sampled": sample_count < file_count,
+        "sampled": incomplete,
         "incomplete": incomplete,
         "incomplete_reason": incomplete_reason,
+        "observed_file_count": stats.get("observed_file_count"),
+        "dirs_visited": stats.get("dirs_visited"),
         "cached": False,
         "embedding_estimate": {
             "estimated_tokens": estimated_tokens,

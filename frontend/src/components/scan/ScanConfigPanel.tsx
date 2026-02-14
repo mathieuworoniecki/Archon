@@ -1,4 +1,4 @@
-import { FolderSearch, Loader2, FileText, Image, Video, HardDrive, Zap } from 'lucide-react'
+import { FolderSearch, Loader2, FileText, Image, Video, HardDrive, Zap, Mail } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -28,6 +28,7 @@ export function ScanConfigPanel({
     const { t } = useTranslation()
 
     const formatNumber = (n: number) => n.toLocaleString()
+    const formatEstimated = (n: number) => `${formatNumber(n)}${estimate?.sampled ? '+' : ''}`
 
     const typeBadges = estimate
         ? [
@@ -35,6 +36,7 @@ export function ScanConfigPanel({
             { key: 'image', icon: Image, color: 'text-blue-400', label: t('scans.images'), count: estimate.type_counts.image },
             { key: 'text', icon: FileText, color: 'text-green-400', label: t('scans.text'), count: estimate.type_counts.text },
             { key: 'video', icon: Video, color: 'text-purple-400', label: t('scans.videos'), count: estimate.type_counts.video },
+            { key: 'email', icon: Mail, color: 'text-amber-400', label: t('scans.emails'), count: estimate.type_counts.email },
         ].filter((entry) => entry.count > 0)
         : []
 
@@ -49,7 +51,7 @@ export function ScanConfigPanel({
                     </div>
                     {estimate && (
                         <Badge variant="secondary">
-                            {formatNumber(estimate.file_count)} {t('scans.filesCount')}
+                            {formatEstimated(estimate.file_count)} {t('scans.filesCount')}
                         </Badge>
                     )}
                 </div>
@@ -66,7 +68,7 @@ export function ScanConfigPanel({
                         <div className="grid grid-cols-2 gap-3">
                             <div className="rounded-lg border bg-card/40 p-3">
                                 <div className="text-xs text-muted-foreground">{t('scans.filesCount')}</div>
-                                <div className="text-lg font-semibold">{formatNumber(estimate.file_count)}</div>
+                                <div className="text-lg font-semibold">{formatEstimated(estimate.file_count)}</div>
                             </div>
                             <div className="rounded-lg border bg-card/40 p-3">
                                 <div className="text-xs text-muted-foreground">{t('scans.totalSize')}</div>
