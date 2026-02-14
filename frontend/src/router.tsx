@@ -1,5 +1,5 @@
 import { createBrowserRouter, RouterProvider, Outlet, Link, useLocation, useNavigate, useSearchParams, Navigate } from 'react-router-dom'
-import { Shield, Github, Activity, FileText, Search, Star, Scan, Sparkles, Calendar, Image as ImageIcon, Sun, Moon, LogOut, FolderOpen, Users, Network, ScrollText, BellRing, CheckSquare, MoreHorizontal } from 'lucide-react'
+import { Shield, Github, Activity, FileText, Search, Star, Scan, Sparkles, Calendar, Image as ImageIcon, Sun, Moon, LogOut, FolderOpen, Users, Network, ScrollText, BellRing, CheckSquare, MoreHorizontal, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useStats } from '@/hooks/useStats'
@@ -50,8 +50,16 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 // Redirect /analysis?q=... → /?q=...  or /analysis?date=... → /?date=...
-function AnalysisRedirect() {
+function AnalysisRoute() {
     const [searchParams] = useSearchParams()
+
+    // Legacy: some deep-links still use /analysis?q=... or /analysis?date=...
+    // If query params exist, keep redirect behavior. Otherwise /analysis is the cockpit workspace.
+    const hasLegacyParams = Boolean(searchParams.get('q') || searchParams.get('date') || searchParams.get('doc'))
+    if (!hasLegacyParams) {
+        return <CockpitPage />
+    }
+
     const target = new URLSearchParams()
     const q = searchParams.get('q')
     const date = searchParams.get('date')
@@ -181,24 +189,35 @@ function RootLayout() {
         return count.toString()
     }
 
-    const navGroups = [
-        // Discovery
+    type NavLinkItem = { kind?: 'link'; path: string; label: string; icon: typeof Search }
+    type NavMenuItem = { kind: 'menu'; label: string; icon: typeof Search; items: NavLinkItem[] }
+    type NavItem = NavLinkItem | NavMenuItem
+
+    const navGroups: NavItem[][] = [
         [
-            { path: '/', label: t('nav.search'), icon: Search },
-            { path: '/cockpit', label: t('nav.analysis'), icon: FileText },
-            { path: '/timeline', label: t('nav.timeline'), icon: Calendar },
-        ],
-        // Intelligence
-        [
+            {
+                kind: 'menu',
+                label: t('nav.documents'),
+                icon: Search,
+                items: [
+                    { path: '/', label: t('nav.search'), icon: Search },
+                    { path: '/gallery', label: t('nav.gallery'), icon: ImageIcon },
+                    { path: '/favorites', label: t('nav.favorites'), icon: Star },
+                ],
+            },
+            {
+                kind: 'menu',
+                label: t('nav.insights'),
+                icon: Activity,
+                items: [
+                    { path: '/analysis', label: t('nav.analysis'), icon: FileText },
+                    { path: '/timeline', label: t('nav.timeline'), icon: Calendar },
+                    { path: '/entities', label: t('nav.entities'), icon: Users },
+                    { path: '/graph', label: t('nav.graph'), icon: Network },
+                    { path: '/audit', label: t('nav.audit'), icon: ScrollText },
+                ],
+            },
             { path: '/chat', label: t('nav.chat'), icon: Sparkles },
-            { path: '/entities', label: t('nav.entities'), icon: Users },
-            { path: '/graph', label: t('nav.graph'), icon: Network },
-            { path: '/audit', label: t('nav.audit'), icon: ScrollText },
-        ],
-        // Collections
-        [
-            { path: '/gallery', label: t('nav.gallery'), icon: ImageIcon },
-            { path: '/favorites', label: t('nav.favorites'), icon: Star },
         ],
     ]
 
@@ -240,20 +259,61 @@ function RootLayout() {
                                     {groupIdx > 0 && (
                                         <div className="w-px h-5 bg-[rgba(255,255,255,0.12)] mx-0.5" />
                                     )}
-                                    {group.map(({ path, label, icon: Icon }) => {
-                                        const isActive = location.pathname === path || 
-                                            (path === '/' && location.pathname === '/')
+                                    {group.map((item) => {
+                                        if ((item as NavMenuItem).kind === 'menu') {
+                                            const menu = item as NavMenuItem
+                                            const isActive = menu.items.some((sub) => location.pathname === sub.path || (sub.path === '/' && location.pathname === '/'))
+                                            const Icon = menu.icon
+                                            return (
+                                                <DropdownMenu key={menu.label}>
+                                                    <DropdownMenuTrigger asChild>
+                                                        <Button
+                                                            variant={isActive ? 'default' : 'ghost'}
+                                                            size="sm"
+                                                            className="gap-1.5 h-7 text-xs px-0 w-8 xl:w-auto xl:px-2"
+                                                            title={menu.label}
+                                                            aria-label={menu.label}
+                                                        >
+                                                            <Icon className="h-3 w-3" />
+                                                            <span className="hidden xl:inline">{menu.label}</span>
+                                                            <ChevronDown className="hidden xl:inline h-3 w-3 opacity-70" />
+                                                        </Button>
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent align="start" className="min-w-[220px]">
+                                                        {menu.items.map(({ path, label, icon: SubIcon }) => {
+                                                            const subActive = location.pathname === path || (path === '/' && location.pathname === '/')
+                                                            return (
+                                                                <DropdownMenuItem
+                                                                    key={path}
+                                                                    onClick={() => navigate(path)}
+                                                                    className={subActive ? 'bg-accent' : undefined}
+                                                                >
+                                                                    <div className="flex items-center gap-2">
+                                                                        <SubIcon className="h-4 w-4 text-muted-foreground" />
+                                                                        <span className="text-sm">{label}</span>
+                                                                    </div>
+                                                                </DropdownMenuItem>
+                                                            )
+                                                        })}
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                            )
+                                        }
+
+                                        const link = item as NavLinkItem
+                                        const Icon = link.icon
+                                        const isActive = location.pathname === link.path || (link.path === '/' && location.pathname === '/')
                                         return (
-                                            <Link key={path} to={path} aria-current={isActive ? 'page' : undefined}>
+                                            <Link key={link.path} to={link.path} aria-current={isActive ? 'page' : undefined}>
                                                 <Button
                                                     variant={isActive ? 'default' : 'ghost'}
                                                     size="sm"
                                                     className="gap-1.5 h-7 text-xs px-0 w-8 xl:w-auto xl:px-2"
-                                                    title={label}
-                                                    aria-label={label}
+                                                    title={link.label}
+                                                    aria-label={link.label}
                                                 >
                                                     <Icon className="h-3 w-3" />
-                                                    <span className="hidden xl:inline">{label}</span>
+                                                    <span className="hidden xl:inline">{link.label}</span>
                                                 </Button>
                                             </Link>
                                         )
@@ -501,11 +561,11 @@ export const router = createBrowserRouter([
             },
             {
                 path: 'analysis',
-                element: <AnalysisRedirect />,
+                element: withRouteSuspense(<AnalysisRoute />),
             },
             {
                 path: 'cockpit',
-                element: withRouteSuspense(<CockpitPage />),
+                element: <Navigate to="/analysis" replace />,
             },
             {
                 path: 'scans',

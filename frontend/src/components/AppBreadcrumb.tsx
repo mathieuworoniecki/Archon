@@ -4,7 +4,7 @@ import { useProject } from '@/contexts/ProjectContext'
 import { useTranslation } from '@/contexts/I18nContext'
 
 const routeLabels: Record<string, string> = {
-    '/': 'nav.search',
+    '/': 'nav.documents',
     '/analysis': 'nav.analysis',
     '/cockpit': 'nav.analysis',
     '/timeline': 'nav.timeline',
@@ -14,6 +14,9 @@ const routeLabels: Record<string, string> = {
     '/scans': 'nav.scans',
     '/entities': 'nav.entities',
     '/graph': 'nav.graph',
+    '/audit': 'nav.audit',
+    '/watchlist': 'nav.watchlist',
+    '/tasks': 'nav.tasks',
 }
 
 export function AppBreadcrumb() {

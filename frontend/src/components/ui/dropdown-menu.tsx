@@ -57,10 +57,11 @@ export function DropdownMenuTrigger({ children, asChild, onClick }: DropdownMenu
 interface DropdownMenuContentProps {
     children: React.ReactNode
     align?: 'start' | 'center' | 'end'
+    className?: string
     onClose?: () => void
 }
 
-export function DropdownMenuContent({ children, align = 'start', onClose }: DropdownMenuContentProps) {
+export function DropdownMenuContent({ children, align = 'start', className, onClose }: DropdownMenuContentProps) {
     const alignClass = {
         start: 'left-0',
         center: 'left-1/2 -translate-x-1/2',
@@ -73,7 +74,8 @@ export function DropdownMenuContent({ children, align = 'start', onClose }: Drop
             "bg-gradient-to-b from-[rgba(30,41,59,0.5)] to-[rgba(15,23,42,0.7)]",
             "backdrop-blur-[16px] backdrop-saturate-[90%]",
             "border-t border-t-[rgba(255,255,255,0.12)] border-b border-b-[rgba(0,0,0,0.4)] border-l border-l-[rgba(255,255,255,0.04)] border-r border-r-[rgba(255,255,255,0.04)]",
-            alignClass[align]
+            alignClass[align],
+            className
         )}>
             {React.Children.map(children, child => {
                 if (React.isValidElement(child) && child.type === DropdownMenuItem) {
@@ -116,4 +118,3 @@ export function DropdownMenuItem({ children, onClick, onSelect, className }: Dro
 export function DropdownMenuSeparator({ className }: { className?: string }) {
     return <div className={cn("-mx-1 my-1 h-px bg-border", className)} />
 }
-
