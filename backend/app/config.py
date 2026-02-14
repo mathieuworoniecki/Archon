@@ -2,6 +2,7 @@
 Archon Backend - Configuration
 """
 from pathlib import Path
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 import logging
@@ -43,6 +44,10 @@ class Settings(BaseSettings):
     
     # Scan Configuration
     scan_root_path: str = "./documents"
+    # Compat: some environments (and the repo `.env`) use DOCUMENTS_PATH.
+    # Keep this as a separate setting to avoid settings validation failures and
+    # to allow `utils.paths.get_scan_root()` to honor it.
+    documents_path: str = Field(default="", description="Optional root path for documents (env: DOCUMENTS_PATH)")
     chunk_size: int = 500
     chunk_overlap: int = 50
     
@@ -67,7 +72,8 @@ class Settings(BaseSettings):
         path.mkdir(parents=True, exist_ok=True)
         return path
     
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # `.env` may include variables for other services (compose), don't crash on unknown keys.
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
 @lru_cache()

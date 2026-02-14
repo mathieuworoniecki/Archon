@@ -15,10 +15,11 @@ def get_scan_root() -> Path:
 
     Priority:
     1. `DOCUMENTS_PATH` env var (already used by projects API)
-    2. `scan_root_path` setting
+    2. `documents_path` setting (from `.env`, same semantic as DOCUMENTS_PATH)
+    3. `scan_root_path` setting (legacy fallback)
     """
     settings = get_settings()
-    root_raw = os.environ.get("DOCUMENTS_PATH") or settings.scan_root_path
+    root_raw = os.environ.get("DOCUMENTS_PATH") or settings.documents_path or settings.scan_root_path
     return Path(root_raw).expanduser().resolve()
 
 

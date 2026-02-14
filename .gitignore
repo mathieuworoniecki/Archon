@@ -56,3 +56,7 @@ competitor_*.png
 
 # External repos (local only)
 .external/
+
+# CI/local generated reports
+backend/rag_eval_report.md
+backend/rag_eval_report.json

@@ -68,6 +68,21 @@ jobs:
           JWT_SECRET_KEY: ci-test-jwt-secret-key-for-pipeline-only-long-enough
           DISABLE_AUTH: "false"
 
+      - name: RAG QA Report (CI-safe)
+        run: python backend/scripts/rag_eval_report.py
+        env:
+          GEMINI_API_KEY: test-key
+          DISABLE_AUTH: "true"
+
+      - name: Upload RAG QA report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-eval-report
+          path: |
+            backend/rag_eval_report.md
+            backend/rag_eval_report.json
+
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
