@@ -248,10 +248,12 @@ function RootLayout() {
                                                 <Button
                                                     variant={isActive ? 'default' : 'ghost'}
                                                     size="sm"
-                                                    className="gap-1.5 h-7 text-xs"
+                                                    className="gap-1.5 h-7 text-xs px-0 w-8 xl:w-auto xl:px-2"
+                                                    title={label}
+                                                    aria-label={label}
                                                 >
                                                     <Icon className="h-3 w-3" />
-                                                    {label}
+                                                    <span className="hidden xl:inline">{label}</span>
                                                 </Button>
                                             </Link>
                                         )
