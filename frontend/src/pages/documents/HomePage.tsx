@@ -574,18 +574,6 @@ export function HomePage() {
         }
     }, [listResults, requestedDocId])
 
-    if (statsLoading) {
-        return (
-            <div className="flex-1 flex items-center justify-center">
-                <div className="animate-pulse text-muted-foreground">{t('home.loading')}</div>
-            </div>
-        )
-    }
-
-    if (!hasDocuments) {
-        return <EmptyState onStartScan={handleStartScan} />
-    }
-
     const PAGE_SIZE_OPTIONS = usesBrowseDataset ? [50, 100, 200] : [20, 50, 100]
     const currentPageSize = usesBrowseDataset ? (browse.filters.limit ?? 50) : searchPageSize
 
@@ -612,6 +600,18 @@ export function HomePage() {
         selectedFileTypes,
         usesBrowseDataset,
     ])
+
+    if (statsLoading) {
+        return (
+            <div className="flex-1 flex items-center justify-center">
+                <div className="animate-pulse text-muted-foreground">{t('home.loading')}</div>
+            </div>
+        )
+    }
+
+    if (!hasDocuments) {
+        return <EmptyState onStartScan={handleStartScan} />
+    }
 
     return (
         <PanelGroup key={`${documentsLayout}-${isSidebarVisible ? 'sidebar' : 'nosidebar'}`} direction="horizontal" className="h-full">

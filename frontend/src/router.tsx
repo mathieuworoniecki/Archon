@@ -14,20 +14,20 @@ import { CommandPalette } from '@/components/CommandPalette'
 import { AppBreadcrumb } from '@/components/AppBreadcrumb'
 import { checkHealth, type HealthStatus } from '@/lib/api'
 
-const HomePage = lazy(() => import('@/pages/HomePage').then((m) => ({ default: m.HomePage })))
-const FavoritesPage = lazy(() => import('@/pages/FavoritesPage').then((m) => ({ default: m.FavoritesPage })))
-const ScansPage = lazy(() => import('@/pages/ScansPage').then((m) => ({ default: m.ScansPage })))
-const ChatPage = lazy(() => import('@/pages/ChatPage').then((m) => ({ default: m.ChatPage })))
-const TimelinePage = lazy(() => import('@/pages/TimelinePage').then((m) => ({ default: m.TimelinePage })))
-const GalleryPage = lazy(() => import('@/pages/GalleryPage').then((m) => ({ default: m.GalleryPage })))
-const LoginPage = lazy(() => import('@/pages/LoginPage').then((m) => ({ default: m.LoginPage })))
-const ProjectDashboard = lazy(() => import('@/pages/ProjectDashboard').then((m) => ({ default: m.ProjectDashboard })))
-const EntitiesPage = lazy(() => import('@/pages/EntitiesPage').then((m) => ({ default: m.EntitiesPage })))
-const GraphPage = lazy(() => import('@/pages/GraphPage').then((m) => ({ default: m.GraphPage })))
-const CockpitPage = lazy(() => import('@/pages/CockpitPage').then((m) => ({ default: m.CockpitPage })))
-const AuditPage = lazy(() => import('@/pages/AuditPage').then((m) => ({ default: m.AuditPage })))
-const WatchlistPage = lazy(() => import('@/pages/WatchlistPage').then((m) => ({ default: m.WatchlistPage })))
-const TasksPage = lazy(() => import('@/pages/TasksPage').then((m) => ({ default: m.TasksPage })))
+const HomePage = lazy(() => import('@/pages/documents/HomePage').then((m) => ({ default: m.HomePage })))
+const FavoritesPage = lazy(() => import('@/pages/documents/FavoritesPage').then((m) => ({ default: m.FavoritesPage })))
+const ScansPage = lazy(() => import('@/pages/ops/ScansPage').then((m) => ({ default: m.ScansPage })))
+const ChatPage = lazy(() => import('@/pages/chat/ChatPage').then((m) => ({ default: m.ChatPage })))
+const TimelinePage = lazy(() => import('@/pages/insights/TimelinePage').then((m) => ({ default: m.TimelinePage })))
+const GalleryPage = lazy(() => import('@/pages/documents/GalleryPage').then((m) => ({ default: m.GalleryPage })))
+const LoginPage = lazy(() => import('@/pages/auth/LoginPage').then((m) => ({ default: m.LoginPage })))
+const ProjectDashboard = lazy(() => import('@/pages/projects/ProjectDashboard').then((m) => ({ default: m.ProjectDashboard })))
+const EntitiesPage = lazy(() => import('@/pages/insights/EntitiesPage').then((m) => ({ default: m.EntitiesPage })))
+const GraphPage = lazy(() => import('@/pages/insights/GraphPage').then((m) => ({ default: m.GraphPage })))
+const CockpitPage = lazy(() => import('@/pages/insights/CockpitPage').then((m) => ({ default: m.CockpitPage })))
+const AuditPage = lazy(() => import('@/pages/insights/AuditPage').then((m) => ({ default: m.AuditPage })))
+const WatchlistPage = lazy(() => import('@/pages/ops/WatchlistPage').then((m) => ({ default: m.WatchlistPage })))
+const TasksPage = lazy(() => import('@/pages/ops/TasksPage').then((m) => ({ default: m.TasksPage })))
 
 function RouteLoadingFallback() {
     return (
