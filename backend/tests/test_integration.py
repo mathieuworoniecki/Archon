@@ -212,6 +212,45 @@ class TestDocuments:
         resp = client.get("/api/documents/99999", headers=admin_headers)
         assert resp.status_code in (404, 500)
 
+    def test_list_documents_date_filters_fallback_to_indexed_at(self, client, admin_headers, db_session):
+        """Date filters should work even when file_modified_at is missing (use indexed_at fallback)."""
+        from datetime import datetime, timezone
+        from app.models import Scan, ScanStatus, Document, DocumentType
+
+        scan = Scan(
+            path="/documents/project-a",
+            status=ScanStatus.COMPLETED,
+            total_files=1,
+            processed_files=1,
+            failed_files=0,
+        )
+        db_session.add(scan)
+        db_session.flush()
+
+        indexed_at = datetime(2026, 2, 10, 12, 0, 0, tzinfo=timezone.utc)
+        doc = Document(
+            scan_id=scan.id,
+            file_path="/documents/project-a/report-a.txt",
+            file_name="report-a.txt",
+            file_type=DocumentType.TEXT,
+            file_size=128,
+            text_length=32,
+            file_modified_at=None,
+            indexed_at=indexed_at,
+        )
+        db_session.add(doc)
+        db_session.commit()
+
+        resp = client.get(
+            "/api/documents/?project_path=/documents/project-a&date_from=2026-02-09T00:00:00Z&date_to=2026-02-11T00:00:00Z",
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert len(data["documents"]) == 1
+        assert data["documents"][0]["file_name"] == "report-a.txt"
+
 
 # ─── Timeline ───────────────────────────────────────────────
 

@@ -7,6 +7,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 logger = logging.getLogger(__name__)
 
@@ -240,15 +241,16 @@ async def hybrid_search(
                      or query.date_from or query.date_to or query.entity_names):
         # Build a filter query
         filter_q = db.query(Document.id).filter(Document.id.in_(doc_ids))
+        source_date = func.coalesce(Document.file_modified_at, Document.indexed_at)
         
         if query.size_min is not None:
             filter_q = filter_q.filter(Document.file_size >= query.size_min)
         if query.size_max is not None:
             filter_q = filter_q.filter(Document.file_size <= query.size_max)
         if query.date_from:
-            filter_q = filter_q.filter(Document.file_modified_at >= query.date_from)
+            filter_q = filter_q.filter(source_date >= query.date_from)
         if query.date_to:
-            filter_q = filter_q.filter(Document.file_modified_at <= query.date_to)
+            filter_q = filter_q.filter(source_date <= query.date_to)
         if query.entity_names:
             filter_q = filter_q.join(Entity).filter(Entity.text.in_(query.entity_names))
         
@@ -355,8 +357,9 @@ async def get_search_facets(
             })
     
     # Date range
-    date_min = base_q.with_entities(func.min(Document.file_modified_at)).scalar()
-    date_max = base_q.with_entities(func.max(Document.file_modified_at)).scalar()
+    source_date = func.coalesce(Document.file_modified_at, Document.indexed_at)
+    date_min = base_q.with_entities(func.min(source_date)).scalar()
+    date_max = base_q.with_entities(func.max(source_date)).scalar()
     date_range = None
     if date_min and date_max:
         date_range = {

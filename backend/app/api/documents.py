@@ -7,7 +7,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 
 from ..database import get_db
 from ..models import Document, DocumentType, User
@@ -45,12 +45,13 @@ def list_documents(
     Supports:
     - Multi-select file types
     - Project path prefix filter
-    - Date range filters (on file_modified_at)
+    - Date range filters (on file_modified_at, with indexed_at fallback)
     - Text search on file name (case-insensitive)
     - Multiple sort options
     - Pagination with total count
     """
     query = db.query(Document)
+    source_date = func.coalesce(Document.file_modified_at, Document.indexed_at)
     
     # Filter by scan
     if scan_id:
@@ -76,9 +77,9 @@ def list_documents(
     
     # Filter by date range (file modification date)
     if date_from:
-        query = query.filter(Document.file_modified_at >= date_from)
+        query = query.filter(source_date >= date_from)
     if date_to:
-        query = query.filter(Document.file_modified_at <= date_to)
+        query = query.filter(source_date <= date_to)
     
     # Get total count before pagination
     total = query.count()
@@ -91,8 +92,8 @@ def list_documents(
         "name_desc": Document.file_name.desc(),
         "size_desc": Document.file_size.desc(),
         "size_asc": Document.file_size.asc(),
-        "modified_desc": Document.file_modified_at.desc(),
-        "modified_asc": Document.file_modified_at.asc(),
+        "modified_desc": source_date.desc(),
+        "modified_asc": source_date.asc(),
     }
     query = query.order_by(sort_options.get(sort_by, Document.indexed_at.desc()))
     

@@ -374,6 +374,15 @@ export function TimelinePage() {
     const peakPeriod = sortedVisible[0] || null
     const topPeriods = sortedVisible.slice(0, 6)
 
+    // Default to the densest visible bucket so the page always shows evidence,
+    // even when users don't immediately click the heatmap.
+    useEffect(() => {
+        if (selectedBucket) return
+        if (isLoading) return
+        if (!peakPeriod) return
+        setSelectedBucket(peakPeriod.date)
+    }, [isLoading, peakPeriod?.date, selectedBucket])
+
     const anomalies = useMemo(() => {
         if (!visiblePoints.length) return []
         const baselineMedian = median(visiblePoints.map(p => p.count))
