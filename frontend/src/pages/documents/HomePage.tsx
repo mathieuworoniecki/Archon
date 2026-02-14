@@ -33,6 +33,7 @@ import {
     Columns2,
     ZoomOut,
     ZoomIn,
+    X,
 } from 'lucide-react'
 import {
     DropdownMenu,
@@ -79,7 +80,7 @@ export function HomePage() {
 
     const { isLoading: statsLoading, hasDocuments } = useStats()
     const { selectedProject, projects, selectProject } = useProject()
-    const { t } = useTranslation()
+    const { t, locale } = useTranslation()
 
     const initialTypes = useMemo(() => {
         if (!typesParam) return [] as FileType[]
@@ -105,10 +106,7 @@ export function HomePage() {
         } catch {
             // ignore
         }
-        if (typeof window !== 'undefined' && window.matchMedia) {
-            if (window.matchMedia('(max-width: 1024px)').matches) return 'grid'
-        }
-        return 'split'
+        return 'grid'
     })
     const [gridThumbnailSize, setGridThumbnailSize] = useState<number>(() => {
         try {
@@ -420,6 +418,20 @@ export function HomePage() {
         setSearchParams(next, { replace: true })
     }, [browse, clearResults, searchParams, setSearchParams])
 
+    const formatChipDate = useCallback((iso?: string | null) => {
+        if (!iso) return ''
+        try {
+            const d = new Date(iso)
+            return d.toLocaleDateString(locale === 'fr' ? 'fr-FR' : 'en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+            })
+        } catch {
+            return iso
+        }
+    }, [locale])
+
     const FILE_TYPE_CONFIG: { type: FileType; label: string; icon: React.ElementType; color: string }[] = [
         { type: 'pdf', label: 'PDF', icon: FileText, color: 'text-red-500' },
         { type: 'image', label: t('scans.images'), icon: Image, color: 'text-blue-500' },
@@ -487,6 +499,77 @@ export function HomePage() {
         selectedFileTypes.length
         + ((browse.filters.date_from || browse.filters.date_to) ? 1 : 0)
         + ((queryMode === 'filename' && queryInput.trim()) ? 1 : 0)
+
+    const activeChips = useMemo(() => {
+        const chips: Array<{ key: string; label: string; onRemove: () => void }> = []
+
+        const filenameQuery = queryMode === 'filename' ? queryInput.trim() : ''
+        if (filenameQuery) {
+            chips.push({
+                key: `q:filename:${filenameQuery}`,
+                label: `${t('browse.filterName')}: ${filenameQuery}`,
+                onRemove: () => {
+                    setQueryInput('')
+                    browse.updateFilters({ search: undefined })
+                },
+            })
+        }
+
+        const contentQuery = queryMode === 'content' ? activeContentQuery : ''
+        if (contentQuery) {
+            chips.push({
+                key: `q:content:${contentQuery}`,
+                label: `${t('home.search')}: ${contentQuery}`,
+                onRemove: () => {
+                    setQueryInput('')
+                    handleQueryModeChange('filename')
+                },
+            })
+        }
+
+        for (const type of selectedFileTypes) {
+            const label = FILE_TYPE_CONFIG.find((cfg) => cfg.type === type)?.label ?? type
+            chips.push({
+                key: `type:${type}`,
+                label,
+                onRemove: () => handleToggleFileType(type),
+            })
+        }
+
+        if (browse.filters.date_from || browse.filters.date_to) {
+            const from = formatChipDate(browse.filters.date_from)
+            const to = formatChipDate(browse.filters.date_to)
+            const label = from && to
+                ? `${t('browse.dateLabel')}: ${from} → ${to}`
+                : from
+                    ? `${t('browse.dateLabel')}: ≥ ${from}`
+                    : to
+                        ? `${t('browse.dateLabel')}: ≤ ${to}`
+                        : t('browse.dateLabel')
+
+            chips.push({
+                key: 'date',
+                label,
+                onRemove: () => browse.setDateRange(undefined, undefined),
+            })
+        }
+
+        return chips
+    }, [
+        FILE_TYPE_CONFIG,
+        activeContentQuery,
+        browse.filters.date_from,
+        browse.filters.date_to,
+        browse.setDateRange,
+        browse.updateFilters,
+        formatChipDate,
+        handleQueryModeChange,
+        handleToggleFileType,
+        queryInput,
+        queryMode,
+        selectedFileTypes,
+        t,
+    ])
 
     const usesBrowseDataset = !isContentSearchActive
     const listResults = usesBrowseDataset ? browseResultsAsSearchResults : results
@@ -950,6 +1033,27 @@ export function HomePage() {
                                     </div>
                                 </div>
                             </div>
+
+                            {activeChips.length > 0 && (
+                                <div className="shrink-0 px-3 py-2 border-b bg-card/20">
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {activeChips.map((chip) => (
+                                            <Button
+                                                key={chip.key}
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                className="h-6 px-2 text-[11px] font-medium gap-1"
+                                                onClick={chip.onRemove}
+                                                title={t('browse.removeFilter')}
+                                            >
+                                                <X className="h-3 w-3 opacity-70" />
+                                                <span className="max-w-[320px] truncate">{chip.label}</span>
+                                            </Button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="flex-1 overflow-hidden">
                                 {documentsLayout === 'grid' ? (
