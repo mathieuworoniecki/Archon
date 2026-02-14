@@ -27,6 +27,7 @@ interface UseTimelineOptions {
     granularity?: 'day' | 'week' | 'month' | 'year'
     scanId?: number
     enabled?: boolean
+    fileTypes?: Array<'pdf' | 'image' | 'text' | 'video' | 'email' | 'unknown'>
 }
 
 export function useTimeline(options: UseTimelineOptions = {}) {
@@ -36,7 +37,7 @@ export function useTimeline(options: UseTimelineOptions = {}) {
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
 
-    const { granularity = 'month', scanId, enabled = true } = options
+    const { granularity = 'month', scanId, enabled = true, fileTypes } = options
 
     const fetchTimeline = useCallback(async () => {
         if (!enabled) return
@@ -48,6 +49,9 @@ export function useTimeline(options: UseTimelineOptions = {}) {
             params.set('granularity', granularity)
             if (scanId) params.set('scan_id', scanId.toString())
             if (selectedProject?.path) params.set('project_path', selectedProject.path)
+            if (fileTypes?.length) {
+                fileTypes.forEach((type) => params.append('file_types', type))
+            }
 
             const response = await authFetch(`${API_BASE}/timeline/aggregation?${params}`)
             if (!response.ok) throw new Error('Failed to fetch timeline')
@@ -59,7 +63,7 @@ export function useTimeline(options: UseTimelineOptions = {}) {
         } finally {
             setIsLoading(false)
         }
-    }, [enabled, granularity, scanId, selectedProject?.path])
+    }, [enabled, granularity, scanId, selectedProject?.path, fileTypes])
 
     const fetchRange = useCallback(async () => {
         if (!enabled) return
@@ -67,6 +71,9 @@ export function useTimeline(options: UseTimelineOptions = {}) {
             const params = new URLSearchParams()
             if (scanId) params.set('scan_id', scanId.toString())
             if (selectedProject?.path) params.set('project_path', selectedProject.path)
+            if (fileTypes?.length) {
+                fileTypes.forEach((type) => params.append('file_types', type))
+            }
 
             const response = await authFetch(`${API_BASE}/timeline/range?${params}`)
             if (!response.ok) throw new Error('Failed to fetch range')
@@ -76,7 +83,7 @@ export function useTimeline(options: UseTimelineOptions = {}) {
         } catch {
             // non-critical: range info supplements the timeline
         }
-    }, [enabled, scanId, selectedProject?.path])
+    }, [enabled, scanId, selectedProject?.path, fileTypes])
 
     useEffect(() => {
         if (!enabled) {

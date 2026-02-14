@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, Date, or_
 
 from ..database import get_db
-from ..models import Document, User
+from ..models import Document, DocumentType, User
 from pydantic import BaseModel
 from ..utils.auth import get_current_user
 
@@ -33,6 +33,31 @@ class TimelineResponse(BaseModel):
     data: List[TimelineDataPoint]
 
 
+def _build_date_key_expr(granularity: str, source_date, db: Session):
+    """Return SQL expression for bucket key compatible with active SQL dialect."""
+    dialect_name = ""
+    if db.bind is not None and db.bind.dialect is not None:
+        dialect_name = db.bind.dialect.name
+
+    if dialect_name == "sqlite":
+        sqlite_formats = {
+            "day": "%Y-%m-%d",
+            "week": "%Y-W%W",
+            "month": "%Y-%m",
+            "year": "%Y",
+        }
+        return func.strftime(sqlite_formats[granularity], source_date)
+
+    # PostgreSQL path
+    pg_formats = {
+        "day": "YYYY-MM-DD",
+        "week": "IYYY-\"W\"IW",
+        "month": "YYYY-MM",
+        "year": "YYYY",
+    }
+    return func.to_char(source_date, pg_formats[granularity])
+
+
 @router.get("/aggregation", response_model=TimelineResponse)
 def get_timeline_aggregation(
     granularity: str = Query("day", pattern="^(day|week|month|year)$"),
@@ -40,6 +65,7 @@ def get_timeline_aggregation(
     date_to: Optional[date] = None,
     scan_id: Optional[int] = None,
     project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
+    file_types: Optional[List[DocumentType]] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -55,19 +81,10 @@ def get_timeline_aggregation(
     Returns a list of data points with counts and breakdown by file type.
     Uses SQL-level aggregation to handle millions of documents efficiently.
     """
-    # Build PostgreSQL to_char format based on granularity
-    granularity_formats = {
-        "day": "YYYY-MM-DD",
-        "week": "IYYY-\"W\"IW",
-        "month": "YYYY-MM",
-        "year": "YYYY",
-    }
-    date_format = granularity_formats[granularity]
-
     # Use file_modified_at when available, otherwise fallback to indexed_at.
     # This keeps timeline useful for datasets with missing filesystem metadata.
     source_date = func.coalesce(Document.file_modified_at, Document.indexed_at)
-    date_key = func.to_char(source_date, date_format).label("date_key")
+    date_key_expr = _build_date_key_expr(granularity, source_date, db)
     
     # Base filter conditions
     base_filters = [source_date.isnot(None)]
@@ -81,6 +98,8 @@ def get_timeline_aggregation(
                 Document.file_path.like(f"{normalized_project_path}/%"),
             )
         )
+    if file_types:
+        base_filters.append(Document.file_type.in_(file_types))
     if date_from:
         base_filters.append(cast(source_date, Date) >= date_from)
     if date_to:
@@ -89,24 +108,24 @@ def get_timeline_aggregation(
     # Query 1: Get total count per date bucket
     totals_query = (
         db.query(
-            date_key,
+            date_key_expr.label("date_key"),
             func.count(Document.id).label("count")
         )
         .filter(*base_filters)
-        .group_by("date_key")
-        .order_by("date_key")
+        .group_by(date_key_expr)
+        .order_by(date_key_expr)
         .all()
     )
     
     # Query 2: Get count per date bucket + file type breakdown
     type_query = (
         db.query(
-            func.to_char(source_date, date_format).label("date_key"),
+            date_key_expr.label("date_key"),
             Document.file_type,
             func.count(Document.id).label("type_count")
         )
         .filter(*base_filters)
-        .group_by("date_key", Document.file_type)
+        .group_by(date_key_expr, Document.file_type)
         .all()
     )
     
@@ -144,6 +163,7 @@ def get_timeline_aggregation(
 def get_timeline_range(
     scan_id: Optional[int] = None,
     project_path: Optional[str] = Query(None, min_length=1, max_length=1024),
+    file_types: Optional[List[DocumentType]] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -169,6 +189,8 @@ def get_timeline_range(
                 Document.file_path.like(f"{normalized_project_path}/%"),
             )
         )
+    if file_types:
+        query = query.filter(Document.file_type.in_(file_types))
     
     result = query.first()
     

@@ -10,6 +10,7 @@ interface TimelineHeatmapProps {
     onDateSelect?: (date: string) => void
     dateFrom?: string
     dateTo?: string
+    selectedDate?: string | null
     dataPoints?: TimelineDataPoint[]
     totalDocuments?: number
     isLoading?: boolean
@@ -57,6 +58,7 @@ export function TimelineHeatmap({
     onDateSelect,
     dateFrom,
     dateTo,
+    selectedDate,
     dataPoints,
     totalDocuments,
     isLoading: isLoadingOverride,
@@ -144,6 +146,7 @@ export function TimelineHeatmap({
                                 onClick={() => onDateSelect?.(point.date)}
                                 className={cn(
                                     "w-full rounded-t-sm transition-all hover:ring-2 hover:ring-primary/50",
+                                    selectedDate === point.date && "ring-2 ring-primary",
                                     getIntensityColor(point.count, maxCount),
                                     onDateSelect && "cursor-pointer"
                                 )}
