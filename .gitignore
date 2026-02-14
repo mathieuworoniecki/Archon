@@ -34,8 +34,8 @@ logs/
 .docker/
 
 # Test documents (user data, not to commit)
-test_documents/
-documents/
+/test_documents/
+/documents/
 
 # Dev notes & reference images
 exemples/
