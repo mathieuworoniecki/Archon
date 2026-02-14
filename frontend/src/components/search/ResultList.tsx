@@ -42,6 +42,7 @@ export function ResultList({
     const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
     const sentinelRef = useRef<HTMLDivElement>(null)
     const scrollContainerRef = useRef<HTMLDivElement>(null)
+    const browseScrollAreaRootRef = useRef<HTMLDivElement>(null)
     const [scrollTop, setScrollTop] = useState(0)
     const [viewportHeight, setViewportHeight] = useState(800)
 
@@ -85,6 +86,41 @@ export function ResultList({
         window.addEventListener('resize', update)
         return () => window.removeEventListener('resize', update)
     }, [])
+
+    useEffect(() => {
+        if (!selectedId) return
+        const selectedIndex = results.findIndex((r) => r.document_id === selectedId)
+        if (selectedIndex < 0) return
+
+        const searchScrollRoot = mode === 'search' && onLoadMore ? scrollContainerRef.current : null
+        const browseScrollRoot = browseScrollAreaRootRef.current
+            ? (browseScrollAreaRootRef.current.querySelector('[data-radix-scroll-area-viewport]') as HTMLDivElement | null)
+            : null
+        const root = searchScrollRoot ?? browseScrollRoot
+        if (!root) return
+
+        // Virtualized lists: if the selected card isn't mounted, jump scrollTop to its expected row position.
+        if (root === searchScrollRoot && shouldVirtualize) {
+            const targetTop = selectedIndex * ROW_HEIGHT
+            const targetBottom = targetTop + ROW_HEIGHT
+            const currentTop = root.scrollTop
+            const currentBottom = currentTop + root.clientHeight
+            if (targetTop < currentTop) {
+                root.scrollTop = targetTop
+            } else if (targetBottom > currentBottom) {
+                root.scrollTop = Math.max(0, targetBottom - root.clientHeight)
+            }
+            return
+        }
+
+        const element = root.querySelector(`[data-result-id="${selectedId}"]`) as HTMLElement | null
+        if (!element && root === searchScrollRoot) {
+            // Fallback (non-virtualized): best-effort scroll near target index.
+            root.scrollTop = selectedIndex * ROW_HEIGHT
+            return
+        }
+        element?.scrollIntoView({ block: 'nearest' })
+    }, [mode, onLoadMore, results, selectedId, shouldVirtualize])
     const [isExporting, setIsExporting] = useState(false)
     const [isAddingFavorites, setIsAddingFavorites] = useState(false)
 
@@ -306,7 +342,7 @@ export function ResultList({
                             <div style={{ height: virtualRange.topPad }} aria-hidden />
                         )}
                         {renderItems.map(({ result }) => (
-                            <div key={result.document_id} className="relative group">
+                            <div key={result.document_id} data-result-id={result.document_id} className="relative group">
                                 <div
                                     className={cn(
                                         "absolute left-2 top-1/2 -translate-y-1/2 z-10 transition-opacity",
@@ -354,7 +390,7 @@ export function ResultList({
                         {listContent}
                     </div>
                 ) : (
-                    <ScrollArea className="flex-1">{listContent}</ScrollArea>
+                    <ScrollArea ref={browseScrollAreaRootRef} className="flex-1">{listContent}</ScrollArea>
                 )
             })()}
         </div>
