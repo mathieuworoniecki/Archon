@@ -72,6 +72,7 @@ Règles importantes:
 4. Sois précis et factuel, évite les spéculations
 5. Réponds en français
 6. Si on te demande de résumer, sois concis mais complet
+7. Si les documents fournis sont insuffisants, réponds EXACTEMENT: "Je n'ai pas trouvé cette information dans les documents."
 
 Format de citation: [Document: nom_du_fichier]""",
         "en": """You are an expert digital investigation assistant. You help investigators analyze documents and find relevant information.
@@ -83,12 +84,20 @@ Important rules:
 4. Be precise and factual, avoid speculation
 5. Answer in English
 6. If asked to summarize, be concise but comprehensive
+7. If the provided documents are insufficient, answer EXACTLY: "I could not find this information in the documents."
 
 Citation format: [Document: file_name]"""
+    }
+    NO_CONTEXT_RESPONSES = {
+        "fr": "Je n'ai pas trouvé cette information dans les documents.",
+        "en": "I could not find this information in the documents.",
     }
 
     def _get_system_prompt(self, locale: str = "fr") -> str:
         return self.SYSTEM_PROMPTS.get(locale, self.SYSTEM_PROMPTS["fr"])
+
+    def _get_no_context_response(self, locale: str = "fr") -> str:
+        return self.NO_CONTEXT_RESPONSES.get(locale, self.NO_CONTEXT_RESPONSES["fr"])
 
     def __init__(self):
         global legacy_genai
@@ -142,7 +151,7 @@ Citation format: [Document: file_name]"""
             if text:
                 yield text
     
-    def _retrieve_context(self, query: str, limit: int = 5) -> List[DocumentContext]:
+    def _retrieve_context(self, query: str, limit: int = 8) -> List[DocumentContext]:
         """
         Retrieve relevant document snippets using semantic search.
         """
@@ -153,7 +162,11 @@ Citation format: [Document: file_name]"""
             # Search in Qdrant
             results = self.qdrant_service.search(
                 query_embedding=query_embedding,
-                limit=limit
+                limit=limit,
+                use_mmr=True,
+                mmr_lambda=0.68,
+                candidate_multiplier=18,
+                min_score=0.25,
             )
             
             contexts = []
@@ -199,7 +212,7 @@ Citation format: [Document: file_name]"""
         self,
         message: str,
         use_rag: bool = True,
-        context_limit: int = 5,
+        context_limit: int = 8,
         include_history: bool = True
     ) -> Dict[str, Any]:
         """
@@ -222,6 +235,16 @@ Citation format: [Document: file_name]"""
         contexts = []
         if use_rag:
             contexts = self._retrieve_context(message, limit=context_limit)
+            if not contexts:
+                assistant_response = self._get_no_context_response("fr")
+                assistant_msg = ChatMessage(role="assistant", content=assistant_response)
+                self.conversation_history.append(assistant_msg)
+                return {
+                    "response": assistant_response,
+                    "contexts": [],
+                    "message_count": len(self.conversation_history),
+                    "rag_enabled": use_rag
+                }
         
         # Build the full prompt
         prompt_parts = [self._get_system_prompt(), ""]
@@ -261,7 +284,7 @@ Citation format: [Document: file_name]"""
         self,
         message: str,
         use_rag: bool = True,
-        context_limit: int = 5,
+        context_limit: int = 8,
         include_history: bool = True
     ):
         """
@@ -277,6 +300,17 @@ Citation format: [Document: file_name]"""
         contexts = []
         if use_rag:
             contexts = self._retrieve_context(message, limit=context_limit)
+            if not contexts:
+                fallback = self._get_no_context_response("fr")
+                yield {"token": fallback}
+                assistant_msg = ChatMessage(role="assistant", content=fallback)
+                self.conversation_history.append(assistant_msg)
+                yield {
+                    "done": True,
+                    "contexts": [],
+                    "message_count": len(self.conversation_history),
+                }
+                return
 
         # Build the full prompt (same logic as chat)
         prompt_parts = [self._get_system_prompt(), ""]

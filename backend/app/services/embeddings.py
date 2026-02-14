@@ -2,7 +2,9 @@
 Archon Backend - Gemini Embeddings Service
 Using Google gemini-embedding-001 for text embeddings
 """
+import hashlib
 import logging
+import re
 from typing import List, Dict, Any
 from ..config import get_settings
 
@@ -174,7 +176,25 @@ class EmbeddingsService:
             List of chunks with text, chunk_index, and embedding.
         """
         chunks = self.chunk_text(text)
-        return self.embed_chunks(chunks)
+        if not chunks:
+            return []
+
+        # Remove exact duplicate chunks after normalization to improve retrieval quality.
+        unique_chunks: List[Dict[str, Any]] = []
+        seen_hashes: set[str] = set()
+        for chunk in chunks:
+            normalized = re.sub(r"\s+", " ", chunk["text"]).strip().lower()
+            if not normalized:
+                continue
+            digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            if digest in seen_hashes:
+                continue
+            seen_hashes.add(digest)
+            unique_chunks.append(chunk)
+
+        if not unique_chunks:
+            return []
+        return self.embed_chunks(unique_chunks)
 
 
 # Singleton instance

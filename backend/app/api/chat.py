@@ -7,7 +7,7 @@ import json
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 class ChatRequest(BaseModel):
     message: str
     use_rag: bool = True
-    context_limit: int = 5
+    context_limit: int = Field(8, ge=1, le=20)
     include_history: bool = True
 
 
