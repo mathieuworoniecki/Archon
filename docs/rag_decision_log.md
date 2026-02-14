@@ -50,6 +50,22 @@ Impacts:
 Reversibilité:
 - Totale: flag désactivable (env) + fallback au ranking existant.
 
+## DEC-004 - Dataset QA RAG versionné en JSON (CI-safe)
+Date: 2026-02-14
+Contexte:
+- CI Archon ne démarre pas Meilisearch/Qdrant et n’a pas de secrets LLM.
+- On veut quand même une boucle anti-régression sur la logique retrieval/rerank (search + chat).
+Décision:
+- Dataset `backend/tests/rag_eval_dataset.json` (versionné) + tests `backend/tests/test_rag_eval_dataset.py`
+  utilisant des stubs (Meili/Qdrant/Embeddings) pour valider:
+  - pipeline `retrieve -> fuse -> rerank -> paginate` (search),
+  - pipeline `retrieve more -> rerank -> top-k` (chat).
+Impacts:
+- Garantit la stabilité du comportement et évite les régressions logiques en CI.
+- Le dataset doit être enrichi progressivement avec des cas plus proches du réel.
+Reversibilité:
+- Forte (tests additionnels, pas de dépendance infra).
+
 ## Template
 Date: YYYY-MM-DD
 Contexte:

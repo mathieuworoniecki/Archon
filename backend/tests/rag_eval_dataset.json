@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "search_cases": [
+    {
+      "id": "search-001",
+      "query": "alpha contract number",
+      "limit": 2,
+      "semantic_weight": 0.5,
+      "meili_hits": [
+        {
+          "id": 1,
+          "file_path": "/docs/a.pdf",
+          "file_name": "a.pdf",
+          "file_type": "pdf",
+          "snippet": "alpha contract number: A-001",
+          "match_positions": {}
+        },
+        {
+          "id": 2,
+          "file_path": "/docs/b.pdf",
+          "file_name": "b.pdf",
+          "file_type": "pdf",
+          "snippet": "alpha contract number: B-002 (verified)",
+          "match_positions": {}
+        }
+      ],
+      "qdrant_hits": [
+        {
+          "document_id": 2,
+          "file_path": "/docs/b.pdf",
+          "file_name": "b.pdf",
+          "file_type": "pdf",
+          "chunk_text": "alpha contract number: B-002 (verified)"
+        },
+        {
+          "document_id": 1,
+          "file_path": "/docs/a.pdf",
+          "file_name": "a.pdf",
+          "file_type": "pdf",
+          "chunk_text": "alpha contract number: A-001"
+        }
+      ],
+      "rerank_scores": {
+        "1": 0.2,
+        "2": 0.95
+      },
+      "expected_top_ids": [2, 1]
+    },
+    {
+      "id": "search-002",
+      "query": "email about flight itinerary",
+      "limit": 3,
+      "semantic_weight": 0.7,
+      "meili_hits": [
+        {
+          "id": 10,
+          "file_path": "/emails/x.eml",
+          "file_name": "x.eml",
+          "file_type": "email",
+          "snippet": "meeting agenda...",
+          "match_positions": {}
+        },
+        {
+          "id": 11,
+          "file_path": "/emails/y.eml",
+          "file_name": "y.eml",
+          "file_type": "email",
+          "snippet": "flight itinerary attached (NYC -> MIA)",
+          "match_positions": {}
+        },
+        {
+          "id": 12,
+          "file_path": "/docs/z.pdf",
+          "file_name": "z.pdf",
+          "file_type": "pdf",
+          "snippet": "unrelated document...",
+          "match_positions": {}
+        }
+      ],
+      "qdrant_hits": [
+        {
+          "document_id": 12,
+          "file_path": "/docs/z.pdf",
+          "file_name": "z.pdf",
+          "file_type": "pdf",
+          "chunk_text": "unrelated document..."
+        },
+        {
+          "document_id": 11,
+          "file_path": "/emails/y.eml",
+          "file_name": "y.eml",
+          "file_type": "email",
+          "chunk_text": "flight itinerary attached (NYC -> MIA)"
+        },
+        {
+          "document_id": 10,
+          "file_path": "/emails/x.eml",
+          "file_name": "x.eml",
+          "file_type": "email",
+          "chunk_text": "meeting agenda..."
+        }
+      ],
+      "rerank_scores": {
+        "10": 0.1,
+        "11": 0.9,
+        "12": 0.05
+      },
+      "expected_top_ids": [11, 10, 12]
+    }
+  ],
+  "chat_cases": [
+    {
+      "id": "chat-001",
+      "query": "What is the flight route mentioned in the email?",
+      "context_limit": 3,
+      "top_k_out": 2,
+      "qdrant_hits": [
+        {
+          "document_id": 11,
+          "file_path": "/emails/y.eml",
+          "file_name": "y.eml",
+          "file_type": "email",
+          "scan_id": 1,
+          "score": 0.42,
+          "chunk_text": "flight itinerary attached (NYC -> MIA)"
+        },
+        {
+          "document_id": 10,
+          "file_path": "/emails/x.eml",
+          "file_name": "x.eml",
+          "file_type": "email",
+          "scan_id": 1,
+          "score": 0.41,
+          "chunk_text": "meeting agenda..."
+        },
+        {
+          "document_id": 12,
+          "file_path": "/docs/z.pdf",
+          "file_name": "z.pdf",
+          "file_type": "pdf",
+          "scan_id": 1,
+          "score": 0.40,
+          "chunk_text": "unrelated document..."
+        }
+      ],
+      "rerank_scores": {
+        "10": 0.05,
+        "11": 0.95,
+        "12": 0.01
+      },
+      "expected_top_ids": [11, 10]
+    }
+  ]
+}
+
