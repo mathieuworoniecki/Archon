@@ -4,6 +4,7 @@ Projects are based on first-level directories in the documents folder.
 """
 import os
 import logging
+import itertools
 import time
 import threading
 from collections import deque
@@ -128,9 +129,15 @@ def get_directory_stats(
 
     queue: deque[tuple[Path, int]] = deque([(resolved_path, 0)])
 
+    # Reserve a slice of the time budget to probe a few unvisited directories.
+    # This helps avoid severe underestimation on trees where files mostly live in deep leaf dirs.
+    max_seconds = max(0.05, float(max_seconds))
+    start_deadline = start_time + max_seconds
+    bfs_deadline = start_time + (max_seconds * 0.75)
+
     try:
         while queue:
-            if time.monotonic() - start_time > max_seconds:
+            if time.monotonic() > bfs_deadline:
                 sampled = True
                 break
             if visited_dirs >= max_dirs:
@@ -217,8 +224,72 @@ def get_directory_stats(
             remaining_dirs = len(queue) + deferred_depth_dirs
             estimated_total_dirs = visited_dirs + remaining_dirs
 
+            # Probe a subset of unvisited directories (and optionally descend a few levels) to
+            # estimate file density in leaf-heavy trees where early BFS often sees "mostly dirs".
+            probe_dirs = 0
+            probe_files = 0
+            probe_subdirs = 0
+            probe_non_empty_dirs = 0
+            probe_files_in_non_empty_dirs = 0
+
+            PROBE_SEEDS = 32
+            PROBE_MAX_DIRS = 192
+            PROBE_CHILDREN_PER_DIR = 8
+
+            probe_queue: deque[tuple[Path, int]] = deque()
+            if queue:
+                # Take seeds from both ends of the queue to reduce branch bias without materializing the full deque.
+                left_budget = min(PROBE_SEEDS // 2, len(queue))
+                right_budget = min(PROBE_SEEDS - left_budget, len(queue) - left_budget)
+                for seed in itertools.islice(queue, left_budget):
+                    probe_queue.append(seed)
+                if right_budget > 0:
+                    for seed in itertools.islice(reversed(queue), right_budget):
+                        probe_queue.append(seed)
+
+            while probe_queue and probe_dirs < PROBE_MAX_DIRS and time.monotonic() < start_deadline:
+                current_path, depth = probe_queue.popleft()
+                probe_dirs += 1
+
+                local_subdirs = 0
+                local_files = 0
+                child_dirs: list[Path] = []
+                try:
+                    with os.scandir(current_path) as entries:
+                        for entry in entries:
+                            name = entry.name
+                            if name.startswith('.'):
+                                continue
+                            try:
+                                if entry.is_dir(follow_symlinks=False):
+                                    local_subdirs += 1
+                                    if depth < max_depth and len(child_dirs) < PROBE_CHILDREN_PER_DIR:
+                                        child_dirs.append(Path(entry.path))
+                                    continue
+                                if entry.is_file(follow_symlinks=False):
+                                    local_files += 1
+                            except (OSError, PermissionError):
+                                continue
+                except (OSError, PermissionError):
+                    continue
+
+                probe_files += local_files
+                probe_subdirs += local_subdirs
+                if local_files > 0:
+                    probe_non_empty_dirs += 1
+                    probe_files_in_non_empty_dirs += local_files
+
+                # If this directory contains no files, descend a bit to find representative leaf density.
+                if local_files == 0 and child_dirs and time.monotonic() < start_deadline:
+                    for child in child_dirs:
+                        if probe_dirs + len(probe_queue) >= PROBE_MAX_DIRS:
+                            break
+                        probe_queue.append((child, depth + 1))
+
             # Estimate deeper undiscovered branches from observed depth>=1 fanout.
-            branch_factor = (deep_subdirs / deep_dirs_visited) if deep_dirs_visited > 0 else 0.0
+            branch_factor_bfs = (deep_subdirs / deep_dirs_visited) if deep_dirs_visited > 0 else 0.0
+            branch_factor_probe = (probe_subdirs / probe_dirs) if probe_dirs > 0 else 0.0
+            branch_factor = max(branch_factor_bfs, branch_factor_probe)
             if remaining_dirs > 0 and branch_factor > 0:
                 if branch_factor < 1.0:
                     extra_dirs = int(remaining_dirs * (branch_factor / max(0.001, 1.0 - branch_factor)))
@@ -233,13 +304,28 @@ def get_directory_stats(
                 if non_empty_dirs > 0
                 else avg_files_per_dir
             )
-            blended_density = max(
+            bfs_density = max(
                 avg_files_per_dir,
                 (avg_files_per_dir * 0.7) + (avg_non_empty * 0.3),
             )
 
-            estimated_files = int(blended_density * max(1, estimated_total_dirs))
-            lower_bound = file_count + int(remaining_dirs * max(1.0, avg_files_per_dir * 0.5))
+            density = bfs_density
+            if probe_dirs > 0:
+                probe_avg_files_per_dir = probe_files / max(1, probe_dirs)
+                probe_avg_non_empty = (
+                    probe_files_in_non_empty_dirs / probe_non_empty_dirs
+                    if probe_non_empty_dirs > 0
+                    else probe_avg_files_per_dir
+                )
+                probe_density = max(
+                    probe_avg_files_per_dir,
+                    (probe_avg_files_per_dir * 0.7) + (probe_avg_non_empty * 0.3),
+                )
+                # Blend conservatively to reduce under-estimation without wildly overshooting.
+                density = max(density, (bfs_density * 0.6) + (probe_density * 0.4))
+
+            estimated_files = int(density * max(1, estimated_total_dirs))
+            lower_bound = file_count + int(remaining_dirs * max(1.0, density * 0.25))
             file_count = max(file_count, estimated_files, lower_bound)
 
         # Size is always estimated from sampled files for bounded latency.
