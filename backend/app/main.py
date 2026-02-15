@@ -53,32 +53,90 @@ async def lifespan(app: FastAPI):
 
 
 def _recover_orphaned_scans():
-    """Mark orphaned RUNNING/PENDING scans as FAILED on startup.
-    
-    After a container restart, Celery tasks are gone but scan status
-    stays RUNNING in the DB. This makes them resumable.
+    """
+    Recover orphaned RUNNING scans on startup.
+
+    Important:
+    - The API container can restart independently of the Celery worker container.
+    - A backend restart must NOT mark an in-flight scan as FAILED.
+
+    Strategy:
+    - Only consider scans marked RUNNING in DB.
+    - If the scan's Celery task is still active/reserved/scheduled (inspect), keep it RUNNING.
+    - Else if Celery backend reports an active state (PROGRESS/STARTED/RETRY), keep it RUNNING.
+    - Else mark as FAILED so the UI can offer Resume.
     """
     import logging
+    from datetime import datetime, timezone
+    from celery.result import AsyncResult
+
     logger = logging.getLogger(__name__)
     from .database import SessionLocal
     from .models import Scan, ScanStatus
-    
+
     db = SessionLocal()
     try:
-        orphaned = db.query(Scan).filter(
-            Scan.status.in_([ScanStatus.RUNNING, ScanStatus.PENDING])
-        ).all()
-        
-        for scan in orphaned:
+        running_scans = db.query(Scan).filter(Scan.status == ScanStatus.RUNNING).all()
+        if not running_scans:
+            return
+
+        inspector = celery_app.control.inspect(timeout=1.0)
+        active = inspector.active()
+        # If workers are unreachable, skip recovery to avoid false positives.
+        if active is None:
+            logger.warning("Celery inspect unavailable; skipping orphaned scan recovery.")
+            return
+
+        reserved = inspector.reserved() or {}
+        scheduled = inspector.scheduled() or {}
+
+        known_task_ids: set[str] = set()
+        for bucket in (active or {}, reserved, scheduled):
+            for tasks in (bucket or {}).values():
+                for task in tasks or []:
+                    if isinstance(task, dict):
+                        task_id = task.get("id")
+                        if isinstance(task_id, str) and task_id:
+                            known_task_ids.add(task_id)
+
+        recovered = 0
+        for scan in running_scans:
+            task_id = scan.celery_task_id
+
+            # If the task appears active/reserved/scheduled, do not touch it.
+            if task_id and task_id in known_task_ids:
+                continue
+
+            # Fallback: check Celery backend state (best effort).
+            if task_id:
+                try:
+                    state = (AsyncResult(task_id, app=celery_app).state or "").upper()
+                except Exception:
+                    state = ""
+
+                if state in {"PROGRESS", "STARTED", "RETRY"}:
+                    continue
+                if state == "SUCCESS":
+                    previous = scan.status
+                    scan.status = ScanStatus.COMPLETED
+                    scan.error_message = None
+                    scan.completed_at = scan.completed_at or datetime.now(timezone.utc)
+                    recovered += 1
+                    logger.warning("Recovered orphaned scan %s (was %s, state=%s)", scan.id, previous.value, state)
+                    continue
+
+            previous = scan.status
             scan.status = ScanStatus.FAILED
             scan.error_message = "Interrompu par redémarrage du serveur"
-            logger.warning(f"Recovered orphaned scan {scan.id} (was {scan.status.value})")
-        
-        if orphaned:
+            scan.completed_at = scan.completed_at or datetime.now(timezone.utc)
+            recovered += 1
+            logger.warning("Recovered orphaned scan %s (was %s)", scan.id, previous.value)
+
+        if recovered:
             db.commit()
-            logger.info(f"Recovered {len(orphaned)} orphaned scan(s)")
+            logger.info("Recovered %s orphaned scan(s)", recovered)
     except Exception as e:
-        logger.error(f"Failed to recover orphaned scans: {e}")
+        logger.error("Failed to recover orphaned scans: %s", e)
         db.rollback()
     finally:
         db.close()
