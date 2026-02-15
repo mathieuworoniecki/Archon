@@ -77,8 +77,9 @@ export function AuditPage() {
     }, [t])
 
     return (
-        <div className="h-full overflow-auto p-6">
-            <div className="max-w-7xl mx-auto space-y-4">
+        <div className="h-full overflow-auto">
+            <div className="container mx-auto px-4 py-6">
+                <div className="max-w-7xl mx-auto space-y-4">
                 <div className="flex items-center gap-3">
                     <ShieldCheck className="h-7 w-7 text-primary" />
                     <div>
@@ -225,6 +226,7 @@ export function AuditPage() {
                         </CardContent>
                     </Card>
                 )}
+            </div>
             </div>
         </div>
     )

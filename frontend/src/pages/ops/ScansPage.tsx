@@ -394,8 +394,9 @@ export function ScansPage() {
     const canExportFromSummary = isComplete && successfulFiles > 0
 
     return (
-        <div className="h-full p-6 space-y-6">
-            <div className="max-w-6xl mx-auto">
+        <div className="h-full overflow-auto">
+            <div className="container mx-auto px-4 py-6">
+                <div className="max-w-6xl mx-auto">
                 {/* Header */}
                 <div className="flex items-center justify-between mb-8">
                     <div className="flex items-center gap-3">
@@ -979,6 +980,7 @@ export function ScansPage() {
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
+            </div>
         </div>
     )
 }
