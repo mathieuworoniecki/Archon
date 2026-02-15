@@ -20,7 +20,8 @@ interface ScanDetail {
     failed_files: number
     created_at: string
     completed_at?: string
-    errors?: Array<{ file: string; error: string }>
+    error_message?: string | null
+    errors?: Array<{ id: number; file_path: string; error_type: string; error_message: string; created_at: string }>
     file_types?: { pdf: number; image: number; text: number }
 }
 
@@ -49,6 +50,7 @@ export function ScanDetailModal({ scanId, open, onClose }: ScanDetailModalProps)
     if (!scan && !loading) return null
 
     const progress = scan ? (scan.processed_files / Math.max(scan.total_files, 1)) * 100 : 0
+    const hasErrorDetails = !!scan && ((scan.failed_files ?? 0) > 0 || !!scan.error_message || scan.status === 'failed')
     
     const statusColor = {
         completed: 'bg-green-500',
@@ -199,20 +201,27 @@ export function ScanDetailModal({ scanId, open, onClose }: ScanDetailModalProps)
 
                         <TabsContent value="errors" className="mt-4">
                             <ScrollArea className="h-[300px]">
-                                {scan.failed_files === 0 ? (
+                                {!hasErrorDetails ? (
                                     <div className="flex flex-col items-center justify-center h-32 text-muted-foreground">
                                         <CheckCircle className="h-8 w-8 mb-2 text-green-500" />
                                         <p>{t('scans.scanNoErrors')}</p>
                                     </div>
                                 ) : (
                                     <div className="space-y-2 pr-4">
+                                        {scan.error_message && (
+                                            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+                                                <p className="text-xs font-mono whitespace-pre-wrap text-muted-foreground">
+                                                    {scan.error_message}
+                                                </p>
+                                            </div>
+                                        )}
                                         {scan.errors?.map((err, i) => (
                                             <div key={i} className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
                                                 <p className="font-mono text-xs text-red-400 truncate">
-                                                    {err.file}
+                                                    {err.file_path}
                                                 </p>
                                                 <p className="text-sm text-muted-foreground mt-1">
-                                                    {err.error}
+                                                    {err.error_type}: {err.error_message}
                                                 </p>
                                             </div>
                                         )) || (

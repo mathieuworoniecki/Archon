@@ -708,7 +708,8 @@ async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db), curr
                     
                     # Stop streaming if scan is done
                     if scan.status in [ScanStatus.COMPLETED, ScanStatus.FAILED, ScanStatus.CANCELLED]:
-                        progress_data["phase"] = "complete" if scan.status == ScanStatus.COMPLETED else progress_data["phase"]
+                        # Ensure UI stepper reaches a terminal state even on failure/cancel.
+                        progress_data["phase"] = "complete"
                         yield f"event: complete\ndata: {json.dumps(progress_data)}\n\n"
                         break
                         

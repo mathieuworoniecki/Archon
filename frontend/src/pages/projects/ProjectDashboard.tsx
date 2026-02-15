@@ -75,7 +75,7 @@ export function ProjectDashboard() {
     const [projectToDelete, setProjectToDelete] = useState<ProjectType | null>(null)
 
     // Resume scan
-    const [isResuming] = useState(false)
+    const [isResuming, setIsResuming] = useState(false)
 
     // Scan estimate
     const [scanEstimate, setScanEstimate] = useState<ScanEstimate | null>(null)
@@ -88,13 +88,28 @@ export function ProjectDashboard() {
     const pendingDeletionTimersRef = useRef<Map<string, number>>(new Map())
 
     const { progress, isComplete, isReconnecting } = useScanProgress(activeScanId)
+    const isFailed = progress?.status === 'failed'
+    const isCancelled = progress?.status === 'cancelled'
+    const isTerminal = isComplete || isFailed || isCancelled
+    const toastKeyRef = useRef<string | null>(null)
 
     // Toast on scan completion
     useEffect(() => {
-        if (isComplete && progress) {
+        if (!progress) return
+        if (!isTerminal) return
+
+        const toastKey = `${progress.scan_id}:${progress.status}`
+        if (toastKeyRef.current === toastKey) return
+        toastKeyRef.current = toastKey
+
+        if (progress.status === 'completed') {
             toast.success(`Scan terminé — ${formatNumber(progress.processed_files)} fichiers traités`)
+        } else if (progress.status === 'failed') {
+            toast.error(`Scan échoué — ${formatNumber(progress.processed_files)} fichiers traités`)
+        } else if (progress.status === 'cancelled') {
+            toast.message(`Scan annulé — ${formatNumber(progress.processed_files)} fichiers traités`)
         }
-    }, [isComplete])
+    }, [isTerminal, progress])
 
     useEffect(() => { fetchScans() }, [])
 
@@ -244,6 +259,25 @@ export function ProjectDashboard() {
         }
     }
 
+    const handleResumeScan = async (scanId: number) => {
+        setIsResuming(true)
+        try {
+            const response = await authFetch(`/api/scan/${scanId}/resume`, { method: 'POST' })
+            if (response.ok) {
+                const data = await response.json()
+                setActiveScanId(data.id || scanId)
+                await fetchScans()
+                toast.success(t('dashboard.toast.resumed'))
+            } else {
+                toast.error(t('scans.toast.resumeFailed'))
+            }
+        } catch {
+            toast.error(t('scans.toast.resumeFailed'))
+        } finally {
+            setIsResuming(false)
+        }
+    }
+
     const formatBytes = (bytes: number): string => {
         if (bytes === 0) return '0 B'
         const k = 1024
@@ -386,22 +420,32 @@ export function ProjectDashboard() {
                     <Card className="border-primary/50 border-2 mb-8 overflow-hidden">
                         {/* Animated top bar */}
                         <div className="h-1 bg-gradient-to-r from-primary via-blue-500 to-primary"
-                             style={{ backgroundSize: '200% 100%', animation: isComplete ? 'none' : 'shimmer 2s linear infinite' }} />
+                             style={{ backgroundSize: '200% 100%', animation: isTerminal ? 'none' : 'shimmer 2s linear infinite' }} />
 
                         <CardContent className="p-6">
                             {/* Header row */}
                             <div className="flex items-center justify-between mb-5">
                                 <div className="flex items-center gap-3">
-                                    <div className={`p-2.5 rounded-xl ${isComplete ? 'bg-green-500/20' : 'bg-primary/15'}`}>
+                                    <div className={`p-2.5 rounded-xl ${isComplete ? 'bg-green-500/20' : isFailed ? 'bg-red-500/20' : isCancelled ? 'bg-orange-500/20' : 'bg-primary/15'}`}>
                                         {isComplete ? (
                                             <CheckCircle2 className="h-6 w-6 text-green-500" />
+                                        ) : isFailed ? (
+                                            <XCircle className="h-6 w-6 text-red-500" />
+                                        ) : isCancelled ? (
+                                            <Square className="h-6 w-6 text-orange-500" />
                                         ) : (
                                             <Loader2 className="h-6 w-6 text-primary animate-spin" />
                                         )}
                                     </div>
                                     <div>
                                         <h2 className="text-lg font-semibold">
-                                            {isComplete ? t('scans.scanComplete') : t('scans.scanInProgress')}
+                                            {isComplete
+                                                ? t('scans.scanComplete')
+                                                : isFailed
+                                                    ? t('scans.scanFailed')
+                                                    : isCancelled
+                                                        ? t('scans.scanCancelled')
+                                                        : t('scans.scanInProgress')}
                                         </h2>
                                         <p className="text-sm text-muted-foreground font-mono">
                                             {formatNumber(progress.processed_files)} / {formatNumber(progress.total_files)} {t('scans.filesCount')}
@@ -414,7 +458,7 @@ export function ProjectDashboard() {
                                         Reconnexion…
                                     </Badge>
                                 )}
-                                {!isComplete && (
+                                {!isTerminal && (
                                     <Button
                                         variant="outline"
                                         onClick={() => handleCancelScan(activeScanId)}
@@ -422,6 +466,21 @@ export function ProjectDashboard() {
                                     >
                                         <Square className="h-4 w-4 mr-2" />
                                         {t('scans.stop')}
+                                    </Button>
+                                )}
+                                {(isFailed || isCancelled) && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => handleResumeScan(activeScanId)}
+                                        disabled={isResuming}
+                                        className="text-primary border-primary/50 hover:bg-primary/10"
+                                    >
+                                        {isResuming ? (
+                                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                        ) : (
+                                            <Play className="h-4 w-4 mr-2" />
+                                        )}
+                                        {t('scans.resume')}
                                     </Button>
                                 )}
                             </div>

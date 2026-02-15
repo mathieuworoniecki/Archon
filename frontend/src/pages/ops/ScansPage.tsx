@@ -379,6 +379,9 @@ export function ScansPage() {
     const processedFiles = progress?.processed_files ?? 0
     const failedFiles = progress?.failed_files ?? 0
     const successfulFiles = Math.max(processedFiles - failedFiles, 0)
+    const isFailed = progress?.status === 'failed'
+    const isCancelled = progress?.status === 'cancelled'
+    const isTerminal = isComplete || isFailed || isCancelled
     const topTypes = progress?.type_counts
         ? Object.entries(progress.type_counts)
             .filter(([, count]) => count > 0)
@@ -413,27 +416,37 @@ export function ScansPage() {
                     <Card className="border-primary/50 border-2 mb-6 overflow-hidden">
                         {/* Animated top bar */}
                         <div className="h-1 bg-gradient-to-r from-primary via-blue-500 to-primary" 
-                             style={{ backgroundSize: '200% 100%', animation: isComplete ? 'none' : 'shimmer 2s linear infinite' }} />
+                             style={{ backgroundSize: '200% 100%', animation: isTerminal ? 'none' : 'shimmer 2s linear infinite' }} />
                         
                         <CardContent className="p-6">
                             {/* Header row */}
                             <div className="flex items-center justify-between mb-5">
                                 <div className="flex items-center gap-3">
-                                    <div className={`p-2.5 rounded-xl ${isComplete ? 'bg-green-500/20' : 'bg-primary/15'}`}>
+                                    <div className={`p-2.5 rounded-xl ${isComplete ? 'bg-green-500/20' : isFailed ? 'bg-red-500/20' : isCancelled ? 'bg-orange-500/20' : 'bg-primary/15'}`}>
                                         {isComplete ? (
                                             <CheckCircle2 className="h-6 w-6 text-green-500" />
+                                        ) : isFailed ? (
+                                            <XCircle className="h-6 w-6 text-red-500" />
+                                        ) : isCancelled ? (
+                                            <Square className="h-6 w-6 text-orange-500" />
                                         ) : (
                                             <Loader2 className="h-6 w-6 text-primary animate-spin" />
                                         )}
                                     </div>
                                     <div>
                                         <h2 className="text-lg font-semibold">
-                                            {isComplete ? t('scans.scanComplete') : t('scans.scanInProgress')}
+                                            {isComplete
+                                                ? t('scans.scanComplete')
+                                                : isFailed
+                                                    ? t('scans.scanFailed')
+                                                    : isCancelled
+                                                        ? t('scans.scanCancelled')
+                                                        : t('scans.scanInProgress')}
                                         </h2>
                                         <p className="text-sm text-muted-foreground font-mono">{activeScanPath}</p>
                                     </div>
                                 </div>
-                                {!isComplete && (
+                                {!isTerminal && (
                                     <Button 
                                         variant="outline" 
                                         onClick={() => handleCancelScan(activeScanId)}
@@ -441,6 +454,16 @@ export function ScansPage() {
                                     >
                                         <Square className="h-4 w-4 mr-2" />
                                         {t('scans.stop')}
+                                    </Button>
+                                )}
+                                {(isFailed || isCancelled) && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => handleResumeScan(activeScanId)}
+                                        className="text-primary border-primary/50 hover:bg-primary/10"
+                                    >
+                                        <Play className="h-4 w-4 mr-2" />
+                                        {t('scans.resume')}
                                     </Button>
                                 )}
                             </div>
@@ -496,7 +519,7 @@ export function ScansPage() {
                                         className="h-full bg-gradient-to-r from-primary to-blue-500 rounded-full transition-all duration-700 ease-out"
                                         style={{ width: `${Math.min(progress.progress_percent, 100)}%` }}
                                     />
-                                    {!isComplete && (
+                                    {!isTerminal && (
                                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent rounded-full"
                                              style={{ animation: 'shimmer 2s linear infinite' }} />
                                     )}
@@ -709,6 +732,37 @@ export function ScansPage() {
                                                 {t('scans.postScanFallbackSearch')}
                                             </Button>
                                         )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {(isFailed || isCancelled) && (
+                                <div className={`mt-4 space-y-2 rounded-lg border p-4 ${isFailed ? 'border-red-500/25 bg-red-500/5' : 'border-orange-500/25 bg-orange-500/5'}`}>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        {isFailed ? (
+                                            <XCircle className="h-5 w-5 text-red-500" />
+                                        ) : (
+                                            <Square className="h-5 w-5 text-orange-500" />
+                                        )}
+                                        <span className="font-medium">
+                                            {isFailed ? t('scans.scanFailed') : t('scans.scanCancelled')}
+                                        </span>
+                                        <Badge variant="outline" className={`${isFailed ? 'border-red-500/40 text-red-500' : 'border-orange-500/40 text-orange-500'}`}>
+                                            {progress.status?.toUpperCase?.() ?? ''}
+                                        </Badge>
+                                        <span className="text-xs text-muted-foreground sm:ml-auto font-mono">
+                                            {formatNumber(processedFiles)} / {formatNumber(progress.total_files)} {t('scans.filesCount')}
+                                        </span>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <Button size="sm" className="gap-1.5" onClick={() => handleResumeScan(activeScanId)}>
+                                            <Play className="h-3.5 w-3.5" />
+                                            {t('scans.resume')}
+                                        </Button>
+                                        <Button variant="outline" size="sm" className="gap-1.5" onClick={fetchScans}>
+                                            <RefreshCw className="h-3.5 w-3.5" />
+                                            {t('scans.refresh')}
+                                        </Button>
                                     </div>
                                 </div>
                             )}

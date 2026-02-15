@@ -33,6 +33,17 @@ def _run_migrations():
         ("audit_logs", "entry_hash", "ALTER TABLE audit_logs ADD COLUMN entry_hash VARCHAR(64)"),
         ("audit_logs", "previous_hash", "ALTER TABLE audit_logs ADD COLUMN previous_hash VARCHAR(64)"),
     ]
+
+    # Type widen migrations (safe in Postgres). Needed for very large corpora where:
+    # - individual file sizes can exceed 2GB (int32 overflow)
+    # - processed counters can exceed 32-bit over time
+    type_widen_migrations = [
+        ("documents", "file_size", "bigint", "ALTER TABLE documents ALTER COLUMN file_size TYPE BIGINT"),
+        ("documents", "text_length", "bigint", "ALTER TABLE documents ALTER COLUMN text_length TYPE BIGINT"),
+        ("scans", "total_files", "bigint", "ALTER TABLE scans ALTER COLUMN total_files TYPE BIGINT"),
+        ("scans", "processed_files", "bigint", "ALTER TABLE scans ALTER COLUMN processed_files TYPE BIGINT"),
+        ("scans", "failed_files", "bigint", "ALTER TABLE scans ALTER COLUMN failed_files TYPE BIGINT"),
+    ]
     
     with engine.connect() as conn:
         for table, column, ddl in migrations:
@@ -48,6 +59,28 @@ def _run_migrations():
                     conn.commit()
             except Exception:
                 pass  # Column already exists
+
+        # Best-effort: widen integer columns if a legacy schema used INT4.
+        for table, column, desired_type, ddl in type_widen_migrations:
+            try:
+                result = conn.execute(
+                    text(
+                        "SELECT data_type FROM information_schema.columns "
+                        "WHERE table_name = :table AND column_name = :column"
+                    ),
+                    {"table": table, "column": column},
+                )
+                current_type = result.scalar()
+                if not current_type:
+                    continue
+                if current_type.lower() == desired_type:
+                    continue
+                if current_type.lower() == "integer" and desired_type == "bigint":
+                    conn.execute(text(ddl))
+                    conn.commit()
+            except Exception:
+                # SQLite (no information_schema) and some managed DBs may not allow ALTER TYPE.
+                pass
 
 
 def init_db():

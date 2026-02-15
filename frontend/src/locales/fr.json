@@ -453,6 +453,8 @@
     "errors": "Erreurs",
     "progression": "Progression",
     "scanComplete": "Scan terminé avec succès !",
+    "scanFailed": "Scan échoué",
+    "scanCancelled": "Scan annulé",
     "newScan": "Nouveau Scan",
     "resumeScan": "Reprendre le Scan",
     "diagnostics": "Diagnostics en direct",

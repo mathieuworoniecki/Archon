@@ -4,7 +4,7 @@ Archon Backend - SQLAlchemy Models
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
-from sqlalchemy import Column, Integer, String, Text, DateTime, Enum as SQLEnum, Float, ForeignKey
+from sqlalchemy import BigInteger, Column, Integer, String, Text, DateTime, Enum as SQLEnum, Float, ForeignKey
 from sqlalchemy.orm import relationship, DeclarativeBase
 
 
@@ -43,15 +43,16 @@ class Scan(Base):
     status = Column(SQLEnum(ScanStatus), default=ScanStatus.PENDING)
     
     # Progress tracking
-    total_files = Column(Integer, default=0)
-    processed_files = Column(Integer, default=0)
-    failed_files = Column(Integer, default=0)
+    # BigInteger: large corpus scans can exceed 32-bit integer ranges over time.
+    total_files = Column(BigInteger, default=0)
+    processed_files = Column(BigInteger, default=0)
+    failed_files = Column(BigInteger, default=0)
     
     # Embedding option
     enable_embeddings = Column(Integer, default=0)  # 0 = disabled, 1 = enabled
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     
@@ -74,11 +75,12 @@ class Document(Base):
     file_path = Column(String(1024), nullable=False, index=True)
     file_name = Column(String(255), nullable=False, index=True)
     file_type = Column(SQLEnum(DocumentType), default=DocumentType.UNKNOWN, index=True)
-    file_size = Column(Integer, default=0)
+    # BigInteger: individual files (videos, disk images, archives) can exceed 2GB.
+    file_size = Column(BigInteger, default=0)
     
     # Content
     text_content = Column(Text, nullable=True)
-    text_length = Column(Integer, default=0)
+    text_length = Column(BigInteger, default=0)
     has_ocr = Column(Integer, default=0)  # Boolean as int for SQLite
     
     # External IDs
@@ -87,7 +89,7 @@ class Document(Base):
     
     # Timestamps
     file_modified_at = Column(DateTime, nullable=True, index=True)
-    indexed_at = Column(DateTime, default=datetime.now(timezone.utc))
+    indexed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Archive info (if extracted from an archive)
     archive_path = Column(String(1024), nullable=True)  # e.g., "archive.zip/subdir/"

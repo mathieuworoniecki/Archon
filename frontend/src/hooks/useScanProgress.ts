@@ -3,7 +3,8 @@ import { ScanProgress, connectScanStream } from '@/lib/api'
 
 export function useScanProgress(scanId: number | null) {
     const [progress, setProgress] = useState<ScanProgress | null>(null)
-    const [isComplete, setIsComplete] = useState(false)
+    // "Finished" means the server sent a terminal "complete" SSE event (completed/failed/cancelled).
+    const [isFinished, setIsFinished] = useState(false)
     const [isReconnecting, setIsReconnecting] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const connectionRef = useRef<{ close: () => void } | null>(null)
@@ -11,7 +12,7 @@ export function useScanProgress(scanId: number | null) {
     useEffect(() => {
         if (!scanId) return
 
-        setIsComplete(false)
+        setIsFinished(false)
         setIsReconnecting(false)
         setError(null)
 
@@ -20,10 +21,13 @@ export function useScanProgress(scanId: number | null) {
             (data) => {
                 setIsReconnecting(false)
                 setProgress(data)
+                if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
+                    setIsFinished(true)
+                }
             },
             () => {
                 setIsReconnecting(false)
-                setIsComplete(true)
+                setIsFinished(true)
             },
             () => {
                 setIsReconnecting(false)
@@ -46,5 +50,7 @@ export function useScanProgress(scanId: number | null) {
         connectionRef.current?.close()
     }, [])
 
-    return { progress, isComplete, isReconnecting, error, disconnect }
+    const isComplete = progress?.status === 'completed'
+
+    return { progress, isFinished, isComplete, isReconnecting, error, disconnect }
 }
