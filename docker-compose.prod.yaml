@@ -63,6 +63,10 @@ services:
     build: ./backend
     container_name: archon-worker-1
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -n worker1@%h -Q default,ocr
+    # The backend image defines a HTTP healthcheck (uvicorn). Override it for
+    # non-HTTP Celery containers to avoid perpetual "unhealthy" status.
+    healthcheck: &celery_healthcheck
+      test: ["NONE"]
     environment: &celery_env
       - REDIS_URL=redis://redis:6379/0
       - MEILISEARCH_URL=http://meilisearch:7700
@@ -95,6 +99,7 @@ services:
     build: ./backend
     container_name: archon-worker-2
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -n worker2@%h -Q default,indexing
+    healthcheck: *celery_healthcheck
     environment: *celery_env
     volumes: *celery_volumes
     depends_on: *celery_depends
@@ -110,6 +115,7 @@ services:
     build: ./backend
     container_name: archon-worker-3
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -n worker3@%h -Q default,ner
+    healthcheck: *celery_healthcheck
     environment: *celery_env
     volumes: *celery_volumes
     depends_on: *celery_depends
@@ -125,6 +131,7 @@ services:
     build: ./backend
     container_name: archon-worker-4
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -n worker4@%h -Q default
+    healthcheck: *celery_healthcheck
     environment: *celery_env
     volumes: *celery_volumes
     depends_on: *celery_depends
@@ -144,6 +151,8 @@ services:
     container_name: archon-flower
     command: celery -A app.workers.celery_app flower --port=5555 --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-changeme}
     # No external port — access via reverse proxy or SSH tunnel
+    healthcheck:
+      test: ["NONE"]
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://${POSTGRES_USER:-archon}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-archon}
