@@ -21,7 +21,6 @@ const FavoritesPage = lazy(() => import('@/pages/documents/FavoritesPage').then(
 const ScansPage = lazy(() => import('@/pages/ops/ScansPage').then((m) => ({ default: m.ScansPage })))
 const ChatPage = lazy(() => import('@/pages/chat/ChatPage').then((m) => ({ default: m.ChatPage })))
 const TimelinePage = lazy(() => import('@/pages/insights/TimelinePage').then((m) => ({ default: m.TimelinePage })))
-const GalleryPage = lazy(() => import('@/pages/documents/GalleryPage').then((m) => ({ default: m.GalleryPage })))
 const LoginPage = lazy(() => import('@/pages/auth/LoginPage').then((m) => ({ default: m.LoginPage })))
 const ProjectDashboard = lazy(() => import('@/pages/projects/ProjectDashboard').then((m) => ({ default: m.ProjectDashboard })))
 const EntitiesPage = lazy(() => import('@/pages/insights/EntitiesPage').then((m) => ({ default: m.EntitiesPage })))
@@ -592,7 +591,8 @@ export const router = createBrowserRouter([
             },
             {
                 path: 'gallery',
-                element: withRouteSuspense(<GalleryPage />),
+                // Gallery is now a Documents mode (full-width grid, filters collapsed).
+                element: <Navigate to="/?view=gallery" replace />,
             },
             {
                 path: 'entities',

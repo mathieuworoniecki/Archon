@@ -63,6 +63,7 @@ export function HomePage() {
     const dateParam = searchParams.get('date')
     const typesParam = searchParams.get('types')
     const docParam = searchParams.get('doc')
+    const viewParam = (searchParams.get('view') ?? '').trim().toLowerCase()
 
     const {
         results,
@@ -334,23 +335,38 @@ export function HomePage() {
     const openResultInSplitView = useCallback((result: SearchResult) => {
         setSelectedResult(result)
         setDocumentsLayout('split')
+        setIsSidebarVisible(true)
         const next = new URLSearchParams(searchParams)
         next.set('doc', String(result.document_id))
+        next.delete('view')
         setSearchParams(next, { replace: true })
     }, [searchParams, setSearchParams])
 
     const handleLayoutGrid = useCallback(() => {
         setDocumentsLayout('grid')
+        setIsSidebarVisible(true)
         const next = new URLSearchParams(searchParams)
         next.delete('doc')
+        next.delete('view')
+        setSearchParams(next, { replace: true })
+    }, [searchParams, setSearchParams])
+
+    const handleLayoutGallery = useCallback(() => {
+        setDocumentsLayout('grid')
+        setIsSidebarVisible(false)
+        const next = new URLSearchParams(searchParams)
+        next.delete('doc')
+        next.delete('view')
         setSearchParams(next, { replace: true })
     }, [searchParams, setSearchParams])
 
     const handleLayoutSplit = useCallback(() => {
         setDocumentsLayout('split')
+        setIsSidebarVisible(true)
         if (!selectedResult) return
         const next = new URLSearchParams(searchParams)
         next.set('doc', String(selectedResult.document_id))
+        next.delete('view')
         setSearchParams(next, { replace: true })
     }, [searchParams, selectedResult, setSearchParams])
 
@@ -431,6 +447,8 @@ export function HomePage() {
         next.delete('q')
         next.delete('types')
         next.delete('date')
+        next.delete('view')
+        next.delete('doc')
         setSearchParams(next, { replace: true })
     }, [browse, clearResults, searchParams, setSearchParams])
 
@@ -734,7 +752,20 @@ export function HomePage() {
         if (!requestedDocId) return
         if (documentsLayout === 'split') return
         setDocumentsLayout('split')
+        setIsSidebarVisible(true)
     }, [documentsLayout, requestedDocId])
+
+    // Support a "gallery mode" entrypoint (alias route) which expands the grid and hides filters.
+    useEffect(() => {
+        if (viewParam !== 'gallery') return
+        setDocumentsLayout('grid')
+        setIsSidebarVisible(false)
+
+        const next = new URLSearchParams(searchParams)
+        next.delete('view')
+        next.delete('doc')
+        setSearchParams(next, { replace: true })
+    }, [searchParams, setSearchParams, viewParam])
 
     // Keep `?doc=` in sync with the visible viewer document when split mode is active.
     useEffect(() => {
@@ -1178,13 +1209,22 @@ export function HomePage() {
 
                                     <div className="flex items-center border rounded-md bg-muted/20 p-0.5">
                                         <Button
-                                            variant={documentsLayout === 'grid' ? 'default' : 'ghost'}
+                                            variant={documentsLayout === 'grid' && isSidebarVisible ? 'default' : 'ghost'}
                                             size="sm"
                                             className="h-7 px-2"
                                             onClick={handleLayoutGrid}
                                             title="Vue grille"
                                         >
                                             <LayoutGrid className="h-3.5 w-3.5" />
+                                        </Button>
+                                        <Button
+                                            variant={documentsLayout === 'grid' && !isSidebarVisible ? 'default' : 'ghost'}
+                                            size="sm"
+                                            className="h-7 px-2"
+                                            onClick={handleLayoutGallery}
+                                            title="Mode galerie"
+                                        >
+                                            <Image className="h-3.5 w-3.5" />
                                         </Button>
                                         <Button
                                             variant={documentsLayout === 'split' ? 'default' : 'ghost'}
