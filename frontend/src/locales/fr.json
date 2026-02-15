@@ -214,6 +214,7 @@
     "sortSizeDesc": "Taille ↓",
     "sortSizeAsc": "Taille ↑",
     "otherTypes": "Autres",
+    "imageFiles": "Images (fichiers)",
     "removeFilter": "Retirer ce filtre",
     "activeFilters": "{count} filtres actifs",
     "emptyProjectTitle": "Aucun document indexé pour ce projet",

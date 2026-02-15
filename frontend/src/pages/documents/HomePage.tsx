@@ -450,7 +450,8 @@ export function HomePage() {
 
     const FILE_TYPE_CONFIG: { type: FileType; label: string; icon: React.ElementType; color: string }[] = [
         { type: 'pdf', label: 'PDF', icon: FileText, color: 'text-red-500' },
-        { type: 'image', label: t('scans.images'), icon: Image, color: 'text-blue-500' },
+        // Avoid confusion with the Gallery which also shows visual PDFs.
+        { type: 'image', label: t('browse.imageFiles'), icon: Image, color: 'text-blue-500' },
         { type: 'text', label: t('scans.text'), icon: FileType2, color: 'text-green-500' },
         { type: 'video', label: t('scans.videos'), icon: Video, color: 'text-purple-500' },
         { type: 'email', label: 'Email', icon: FileType2, color: 'text-amber-500' },

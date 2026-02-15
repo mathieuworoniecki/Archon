@@ -214,6 +214,7 @@
     "sortSizeDesc": "Size ↓",
     "sortSizeAsc": "Size ↑",
     "otherTypes": "Other",
+    "imageFiles": "Image files",
     "removeFilter": "Remove filter",
     "activeFilters": "{count} active filters",
     "emptyProjectTitle": "No indexed documents in this project",
