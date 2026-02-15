@@ -22,6 +22,8 @@ services:
     ports:
       - "8100:8000"
     environment:
+      # Inside containers, the documents volume is mounted at /documents
+      - DOCUMENTS_PATH=/documents
       - REDIS_URL=redis://redis:6379/0
       - MEILISEARCH_URL=http://meilisearch:7700
       - MEILISEARCH_API_KEY=${MEILISEARCH_API_KEY:-devkey123}
@@ -60,6 +62,8 @@ services:
     healthcheck:
       test: ["NONE"]
     environment:
+      # Keep in sync with the backend container
+      - DOCUMENTS_PATH=/documents
       - REDIS_URL=redis://redis:6379/0
       - MEILISEARCH_URL=http://meilisearch:7700
       - MEILISEARCH_API_KEY=${MEILISEARCH_API_KEY:-devkey123}
