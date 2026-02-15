@@ -5,11 +5,12 @@ import { useTranslation } from '@/contexts/I18nContext'
 
 const routeLabels: Record<string, string> = {
     '/': 'nav.documents',
-    '/analysis': 'nav.analysis',
-    '/cockpit': 'nav.analysis',
+    // Legacy aliases: keep breadcrumbs consistent with the single Documents workspace.
+    '/analysis': 'nav.search',
+    '/cockpit': 'nav.search',
     '/timeline': 'nav.timeline',
     '/chat': 'nav.chat',
-    '/gallery': 'nav.gallery',
+    '/gallery': 'nav.search',
     '/favorites': 'nav.favorites',
     '/scans': 'nav.scans',
     '/entities': 'nav.entities',

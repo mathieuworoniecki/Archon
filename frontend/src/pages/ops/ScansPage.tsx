@@ -293,7 +293,7 @@ export function ScansPage() {
 
     const handleExportFromSummary = async () => {
         if (!activeScanId) {
-            navigate('/analysis')
+            navigate('/')
             return
         }
 
@@ -332,7 +332,7 @@ export function ScansPage() {
 
             if (documentIds.length === 0) {
                 toast.message(t('scans.postScanExportUnavailable'))
-                navigate('/analysis')
+                navigate('/')
                 return
             }
 
@@ -365,14 +365,14 @@ export function ScansPage() {
             toast.success(t('scans.postScanExportReady').replace('{count}', formatNumber(documentIds.length)))
         } catch {
             toast.message(t('scans.postScanExportFallback'))
-            navigate('/analysis')
+            navigate('/')
         } finally {
             setIsExportingSummary(false)
         }
     }
 
     const openSearchFallback = () => {
-        navigate('/analysis')
+        navigate('/')
     }
 
     const activeScanPath = scans.find((scan) => scan.id === activeScanId)?.path ?? contextProject?.path ?? '-'

@@ -676,12 +676,12 @@ export function ProjectDashboard() {
                                             size="sm"
                                             onClick={() => {
                                                 const proj = projects.find(p => scans.find(s => s.id === activeScanId && s.path === p.path))
-                                                if (proj) { selectProject(proj); navigate('/analysis') }
+                                                if (proj) { selectProject(proj); navigate('/') }
                                             }}
                                             className="gap-1.5"
                                         >
                                             <Database className="h-3.5 w-3.5" />
-                                            Ouvrir l'analyse
+                                            Ouvrir les documents
                                             <ArrowRight className="h-3.5 w-3.5" />
                                         </Button>
                                         <Button
@@ -689,12 +689,12 @@ export function ProjectDashboard() {
                                             size="sm"
                                             onClick={() => {
                                                 const proj = projects.find(p => scans.find(s => s.id === activeScanId && s.path === p.path))
-                                                if (proj) { selectProject(proj); navigate('/gallery') }
+                                                if (proj) { selectProject(proj); navigate('/?view=gallery') }
                                             }}
                                             className="gap-1.5"
                                         >
                                             <Image className="h-3.5 w-3.5" />
-                                            Galerie
+                                            Mode galerie
                                         </Button>
                                         <Button
                                             variant="outline"

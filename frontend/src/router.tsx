@@ -49,6 +49,15 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <>{children}</>
 }
 
+function AnalysisRedirect() {
+    const location = useLocation()
+    // Keep legacy deep-links functional but avoid a separate "analysis" page in the UX.
+    // Examples:
+    //   /analysis?doc=123  -> /?doc=123
+    //   /analysis?q=...    -> /?q=...
+    return <Navigate to={`/${location.search}`} replace />
+}
+
 // Redirects to /projects if no project is currently selected
 function ProjectGuard({ children }: { children: React.ReactNode }) {
     const { selectedProject } = useProject()
@@ -195,7 +204,6 @@ function RootLayout() {
                 label: t('nav.insights'),
                 icon: Activity,
                 items: [
-                    { path: '/analysis', label: t('nav.analysis'), icon: FileText },
                     { path: '/timeline', label: t('nav.timeline'), icon: Calendar },
                     { path: '/entities', label: t('nav.entities'), icon: Users },
                     { path: '/graph', label: t('nav.graph'), icon: Network },
@@ -547,11 +555,11 @@ export const router = createBrowserRouter([
             },
             {
                 path: 'analysis',
-                element: withRouteSuspense(<HomePage />),
+                element: withRouteSuspense(<AnalysisRedirect />),
             },
             {
                 path: 'cockpit',
-                element: <Navigate to="/analysis" replace />,
+                element: <Navigate to="/" replace />,
             },
             {
                 path: 'scans',

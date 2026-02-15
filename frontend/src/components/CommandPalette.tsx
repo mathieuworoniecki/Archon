@@ -31,9 +31,8 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
     const navItems: PaletteItem[] = useMemo(() => [
         { id: 'nav-dashboard', label: 'Projets / Dashboard', description: 'Changer de projet ou voir l’état des scans', section: 'navigation', icon: <LayoutDashboard className="h-4 w-4" />, action: () => { navigate('/projects'); onClose() }, shortcut: 'N' },
         { id: 'nav-search', label: 'Recherche', description: 'Recherche par mot-clé ou sens (IA)', section: 'navigation', icon: <Search className="h-4 w-4" />, action: () => { navigate('/'); onClose() } },
-        { id: 'nav-analysis', label: 'Analyse documents', description: 'Parcourir et filtrer tous les documents du projet', section: 'navigation', icon: <FileText className="h-4 w-4" />, action: () => { navigate('/analysis'); onClose() } },
         { id: 'nav-timeline', label: 'Timeline', description: 'Explorer les documents par date', section: 'navigation', icon: <Calendar className="h-4 w-4" />, action: () => { navigate('/timeline'); onClose() }, shortcut: 'T' },
-        { id: 'nav-gallery', label: 'Galerie', description: 'Images et vidéos du projet', section: 'navigation', icon: <Image className="h-4 w-4" />, action: () => { navigate('/gallery'); onClose() }, shortcut: 'G' },
+        { id: 'nav-gallery', label: 'Mode galerie', description: 'Grille plein ecran, filtres replies', section: 'navigation', icon: <Image className="h-4 w-4" />, action: () => { navigate('/?view=gallery'); onClose() }, shortcut: 'G' },
         { id: 'nav-chat', label: 'Chat IA', description: 'Poser des questions sur vos documents', section: 'navigation', icon: <Sparkles className="h-4 w-4" />, action: () => { navigate('/chat'); onClose() } },
         { id: 'nav-favorites', label: 'Favoris', description: 'Documents marqués et synthèse IA', section: 'navigation', icon: <Star className="h-4 w-4" />, action: () => { navigate('/favorites'); onClose() } },
         { id: 'nav-scans', label: 'Scans', description: 'Lancer ou suivre un scan', section: 'navigation', icon: <Scan className="h-4 w-4" />, action: () => { navigate('/scans'); onClose() } },
