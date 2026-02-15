@@ -1,5 +1,5 @@
 import { createBrowserRouter, RouterProvider, Outlet, Link, useLocation, useNavigate, useSearchParams, Navigate } from 'react-router-dom'
-import { Shield, Github, Activity, FileText, Search, Star, Scan, Sparkles, Calendar, Image as ImageIcon, Sun, Moon, LogOut, FolderOpen, Users, Network, ScrollText, BellRing, CheckSquare, MoreHorizontal, ChevronDown } from 'lucide-react'
+import { Shield, Github, Activity, FileText, Search, Star, Scan, Sparkles, Calendar, Sun, Moon, LogOut, FolderOpen, Users, Network, ScrollText, BellRing, CheckSquare, MoreHorizontal, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useStats } from '@/hooks/useStats'
@@ -210,7 +210,6 @@ function RootLayout() {
                 icon: Search,
                 items: [
                     { path: '/', label: t('nav.search'), icon: Search },
-                    { path: '/gallery', label: t('nav.gallery'), icon: ImageIcon },
                     { path: '/favorites', label: t('nav.favorites'), icon: Star },
                 ],
             },
