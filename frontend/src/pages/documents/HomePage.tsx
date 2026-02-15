@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { ResultList } from '@/components/search/ResultList'
 import { ResultGrid } from '@/components/search/ResultGrid'
@@ -58,12 +58,14 @@ const DOCUMENTS_SIDEBAR_KEY = 'archon_documents_sidebar_visible'
 export function HomePage() {
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
+    const location = useLocation()
 
     const queryParam = (searchParams.get('q') ?? '').trim()
     const dateParam = searchParams.get('date')
     const typesParam = searchParams.get('types')
     const docParam = searchParams.get('doc')
     const viewParam = (searchParams.get('view') ?? '').trim().toLowerCase()
+    const isAnalysisEntry = location.pathname === '/analysis'
 
     const {
         results,
@@ -107,6 +109,8 @@ export function HomePage() {
     const [documentsLayout, setDocumentsLayout] = useState<DocumentsLayout>(() => {
         // If the URL points to a specific document, assume the user wants the viewer open.
         if (docParam) return 'split'
+        // /analysis is a shortcut for "reader/cockpit" mode (3 panels).
+        if (isAnalysisEntry) return 'split'
         try {
             const saved = localStorage.getItem(DOCUMENTS_LAYOUT_KEY)
             if (saved === 'grid' || saved === 'split') return saved
@@ -134,6 +138,7 @@ export function HomePage() {
         return 50
     })
     const [isSidebarVisible, setIsSidebarVisible] = useState<boolean>(() => {
+        if (isAnalysisEntry) return true
         try {
             const saved = localStorage.getItem(DOCUMENTS_SIDEBAR_KEY)
             if (saved === '0') return false
@@ -754,6 +759,13 @@ export function HomePage() {
         setDocumentsLayout('split')
         setIsSidebarVisible(true)
     }, [documentsLayout, requestedDocId])
+
+    // Make /analysis a "split view" entrypoint, without forcing it again after user toggles.
+    useEffect(() => {
+        if (!isAnalysisEntry) return
+        setDocumentsLayout('split')
+        setIsSidebarVisible(true)
+    }, [isAnalysisEntry])
 
     // Support a "gallery mode" entrypoint (alias route) which expands the grid and hides filters.
     useEffect(() => {

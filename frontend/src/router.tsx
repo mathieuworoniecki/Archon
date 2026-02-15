@@ -1,4 +1,4 @@
-import { createBrowserRouter, RouterProvider, Outlet, Link, useLocation, useNavigate, useSearchParams, Navigate } from 'react-router-dom'
+import { createBrowserRouter, RouterProvider, Outlet, Link, useLocation, useNavigate, Navigate } from 'react-router-dom'
 import { Shield, Github, Activity, FileText, Search, Star, Scan, Sparkles, Calendar, Sun, Moon, LogOut, FolderOpen, Users, Network, ScrollText, BellRing, CheckSquare, MoreHorizontal, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -25,7 +25,6 @@ const LoginPage = lazy(() => import('@/pages/auth/LoginPage').then((m) => ({ def
 const ProjectDashboard = lazy(() => import('@/pages/projects/ProjectDashboard').then((m) => ({ default: m.ProjectDashboard })))
 const EntitiesPage = lazy(() => import('@/pages/insights/EntitiesPage').then((m) => ({ default: m.EntitiesPage })))
 const GraphPage = lazy(() => import('@/pages/insights/GraphPage').then((m) => ({ default: m.GraphPage })))
-const CockpitPage = lazy(() => import('@/pages/insights/CockpitPage').then((m) => ({ default: m.CockpitPage })))
 const AuditPage = lazy(() => import('@/pages/insights/AuditPage').then((m) => ({ default: m.AuditPage })))
 const WatchlistPage = lazy(() => import('@/pages/ops/WatchlistPage').then((m) => ({ default: m.WatchlistPage })))
 const TasksPage = lazy(() => import('@/pages/ops/TasksPage').then((m) => ({ default: m.TasksPage })))
@@ -48,28 +47,6 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
         return <Navigate to="/login" replace />
     }
     return <>{children}</>
-}
-
-// Redirect /analysis?q=... → /?q=...  or /analysis?date=... → /?date=...
-function AnalysisRoute() {
-    const [searchParams] = useSearchParams()
-
-    // Legacy: some deep-links still use /analysis?q=... or /analysis?date=...
-    // If query params exist, keep redirect behavior. Otherwise /analysis is the cockpit workspace.
-    const hasLegacyParams = Boolean(searchParams.get('q') || searchParams.get('date') || searchParams.get('doc'))
-    if (!hasLegacyParams) {
-        return <CockpitPage />
-    }
-
-    const target = new URLSearchParams()
-    const q = searchParams.get('q')
-    const date = searchParams.get('date')
-    const doc = searchParams.get('doc')
-    if (q) target.set('q', q)
-    if (date) target.set('date', date)
-    if (doc) target.set('doc', doc)
-    const qs = target.toString()
-    return <Navigate to={qs ? `/?${qs}` : '/'} replace />
 }
 
 // Redirects to /projects if no project is currently selected
@@ -570,7 +547,7 @@ export const router = createBrowserRouter([
             },
             {
                 path: 'analysis',
-                element: withRouteSuspense(<AnalysisRoute />),
+                element: withRouteSuspense(<HomePage />),
             },
             {
                 path: 'cockpit',
