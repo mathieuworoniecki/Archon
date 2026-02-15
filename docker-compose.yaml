@@ -63,6 +63,9 @@ services:
       - DATABASE_URL=postgresql://archon:archon@postgres:5432/archon
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - TESSERACT_CMD=/usr/bin/tesseract
+      # Keep auth config consistent with the API container (otherwise the worker crashes on startup).
+      - DISABLE_AUTH=${DISABLE_AUTH:-false}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
     volumes:
       - ${DOCUMENTS_PATH:-./documents}:/documents:ro
     depends_on:
