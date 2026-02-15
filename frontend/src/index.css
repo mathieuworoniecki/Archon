@@ -57,6 +57,45 @@
     --font-data: 'Space Mono', 'JetBrains Mono', ui-monospace, monospace;
   }
 
+  html.light {
+    /* Light theme tokens (keeps the same "industrial" direction, just daylight) */
+    --bg-deep: #F8FAFC;
+    --glass-surface: rgba(255, 255, 255, 0.70);
+    --border-subtle: rgba(15, 23, 42, 0.12);
+    --text-primary: #0F172A;
+    --text-muted: #475569;
+    --accent-focus: #B45309;
+    --accent-safe: #2D6A78;
+
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 38 92% 45%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 192 45% 32%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 35%;
+
+    --accent: 38 92% 45%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 74% 42%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 32% 86%;
+    --input: 214 32% 86%;
+    --ring: 38 92% 45%;
+  }
+
   /* ── Global Base ──────────────────────────────────────────── */
   * {
     @apply border-border;
@@ -78,6 +117,14 @@
     line-height: 1.6;
     min-height: 100vh;
   }
+}
+
+/* Theme transition (enabled briefly during toggles) */
+html.theme-transition,
+html.theme-transition * {
+  transition-property: background-color, color, border-color, fill, stroke, box-shadow;
+  transition-duration: 220ms;
+  transition-timing-function: ease;
 }
 
 /* ═══════════════════════════════════════════════════════════════

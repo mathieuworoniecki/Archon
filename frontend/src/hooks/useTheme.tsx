@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 
 type Theme = 'dark' | 'light'
 
@@ -14,9 +14,19 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         const stored = localStorage.getItem('archon-theme')
         return (stored === 'light' || stored === 'dark') ? stored : 'dark'
     })
+    const hasMountedRef = useRef(false)
 
     useEffect(() => {
         const root = document.documentElement
+
+        // Smooth theme transitions (avoid on first paint).
+        if (hasMountedRef.current) {
+            root.classList.add('theme-transition')
+            window.setTimeout(() => root.classList.remove('theme-transition'), 260)
+        } else {
+            hasMountedRef.current = true
+        }
+
         if (theme === 'light') {
             root.classList.add('light')
         } else {

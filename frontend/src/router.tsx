@@ -12,7 +12,9 @@ import { useProject, ProjectProvider } from '@/contexts/ProjectContext'
 import { toast } from 'sonner'
 import { CommandPalette } from '@/components/CommandPalette'
 import { AppBreadcrumb } from '@/components/AppBreadcrumb'
+import { OnboardingDialog, isOnboardingDismissed } from '@/components/OnboardingDialog'
 import { checkHealth, type HealthStatus } from '@/lib/api'
+import { ENABLE_COLLAB_FEATURES } from '@/lib/featureFlags'
 
 const HomePage = lazy(() => import('@/pages/documents/HomePage').then((m) => ({ default: m.HomePage })))
 const FavoritesPage = lazy(() => import('@/pages/documents/FavoritesPage').then((m) => ({ default: m.FavoritesPage })))
@@ -89,6 +91,7 @@ function RootLayout() {
     const { t, locale, setLocale } = useTranslation()
     const { selectedProject } = useProject()
     const [isPaletteOpen, setIsPaletteOpen] = useState(false)
+    const [isOnboardingOpen, setIsOnboardingOpen] = useState(false)
     const mainContentRef = useRef<HTMLElement>(null)
     const lastFocusedLocationKeyRef = useRef(location.key)
     const shortcutsHelpDescription = useMemo(() => {
@@ -165,6 +168,13 @@ function RootLayout() {
     useKeyboardShortcuts(shortcuts)
 
     useEffect(() => {
+        if (!stats) return
+        if ((stats.total_documents ?? 0) > 0) return
+        if (isOnboardingDismissed()) return
+        setIsOnboardingOpen(true)
+    }, [stats])
+
+    useEffect(() => {
         if (location.key === lastFocusedLocationKeyRef.current) {
             return
         }
@@ -222,10 +232,10 @@ function RootLayout() {
     ]
 
     // Less frequently used tools: keep accessible but out of the primary nav.
-    const overflowItems = [
+    const overflowItems = ENABLE_COLLAB_FEATURES ? ([
         { path: '/watchlist', label: t('nav.watchlist'), icon: BellRing },
         { path: '/tasks', label: t('nav.tasks'), icon: CheckSquare },
-    ]
+    ]) : []
     const isOverflowActive = overflowItems.some(({ path }) => location.pathname === path)
 
     return (
@@ -458,6 +468,7 @@ function RootLayout() {
             </footer>
         </div>
         <CommandPalette isOpen={isPaletteOpen} onClose={() => setIsPaletteOpen(false)} />
+        <OnboardingDialog open={isOnboardingOpen} onOpenChange={setIsOnboardingOpen} />
         </>
     )
 }
