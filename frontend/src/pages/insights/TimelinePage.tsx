@@ -399,6 +399,25 @@ export function TimelinePage() {
         return (top3Total / visibleTotal) * 100
     }, [sortedVisible, visibleTotal])
 
+    const collapsedDatesSignal = useMemo(() => {
+        if (isInitialLoad) return null
+        if (!peakPeriod) return null
+        if (visibleTotal <= 0) return null
+
+        const top1Share = (peakPeriod.count / visibleTotal) * 100
+        const top3Share = concentrationTop3
+        const looksCollapsed =
+            visibleTotal >= 50 && (top1Share >= 70 || (visiblePoints.length <= 3 && top3Share >= 85))
+
+        if (!looksCollapsed) return null
+        return {
+            peakDate: peakPeriod.date,
+            top1Share,
+            top3Share,
+            buckets: visiblePoints.length,
+        }
+    }, [concentrationTop3, isInitialLoad, peakPeriod, visiblePoints.length, visibleTotal])
+
     const recentTrend = useMemo(() => {
         if (visiblePoints.length < 6) return { direction: 'stable' as const, delta: 0 }
         const tail = visiblePoints.slice(-6)
@@ -530,8 +549,8 @@ export function TimelinePage() {
     }, [navigate, selectedBucket, selectedFileTypes])
 
     return (
-        <div className="h-full overflow-auto p-6">
-            <div className="mx-auto max-w-7xl space-y-6">
+        <div className="h-full overflow-auto">
+            <div className="container mx-auto px-4 py-6 space-y-6">
                 <div className="flex items-center gap-3">
                     <Calendar className="h-8 w-8 text-primary" />
                     <div>
@@ -539,6 +558,64 @@ export function TimelinePage() {
                         <p className="text-muted-foreground">{t('timeline.subtitle')}</p>
                     </div>
                 </div>
+
+                {collapsedDatesSignal && (
+                    <Card className="border-amber-500/20 bg-amber-500/5">
+                        <CardContent className="pt-5">
+                            <div className="flex items-start gap-3">
+                                <AlertTriangle className="h-5 w-5 text-amber-400 mt-0.5" />
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <p className="text-sm font-semibold">
+                                            {t('timeline.datesCollapsedTitle')}
+                                        </p>
+                                        <Badge variant="outline" className="text-amber-300 border-amber-500/30">
+                                            {asPercent(collapsedDatesSignal.top1Share)}{' '}
+                                            {t('timeline.ofVisibleDocuments').replace('{count}', formatNumber(visibleTotal))}
+                                        </Badge>
+                                    </div>
+                                    <p className="text-sm text-muted-foreground mt-1">
+                                        {t('timeline.datesCollapsedBody')}
+                                    </p>
+
+                                    <div className="flex flex-wrap items-center gap-2 mt-3">
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => {
+                                                setSelectedBucket(collapsedDatesSignal.peakDate)
+                                                try {
+                                                    selectedPeriodCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                                                } catch {
+                                                    // ignore
+                                                }
+                                            }}
+                                        >
+                                            <Eye className="h-4 w-4 mr-2" />
+                                            {t('timeline.selectedPeriod')}
+                                        </Button>
+                                        <Button
+                                            size="sm"
+                                            onClick={() => {
+                                                setSelectedBucket(collapsedDatesSignal.peakDate)
+                                                setTimeout(handleOpenSearchWorkspace, 0)
+                                            }}
+                                        >
+                                            <Search className="h-4 w-4 mr-2" />
+                                            {t('timeline.openSearchWorkspace')}
+                                        </Button>
+                                        <Button size="sm" variant="ghost" asChild>
+                                            <Link to="/scans">
+                                                <ChevronsRight className="h-4 w-4 mr-2" />
+                                                {t('timeline.goToScans')}
+                                            </Link>
+                                        </Button>
+                                    </div>
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
                     <Card>

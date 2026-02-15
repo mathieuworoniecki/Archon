@@ -254,6 +254,8 @@
   "timeline": {
     "title": "Timeline",
     "subtitle": "Chronological visualization of documents",
+    "datesCollapsedTitle": "Dates are clustered",
+    "datesCollapsedBody": "Most documents fall into very few periods (often the copy/import date). For a forensic timeline, extract internal dates (PDF/EXIF/Email).",
     "documents": "Documents",
     "activePeriods": "Active periods",
     "start": "Start",

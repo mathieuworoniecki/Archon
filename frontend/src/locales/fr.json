@@ -254,6 +254,8 @@
   "timeline": {
     "title": "Timeline",
     "subtitle": "Visualisation chronologique des documents",
+    "datesCollapsedTitle": "Dates concentrées",
+    "datesCollapsedBody": "La majorité des documents tombe sur très peu de périodes (souvent la date de copie/import). Pour une timeline forensics, il faut extraire des dates internes (PDF/EXIF/Email).",
     "documents": "Documents",
     "activePeriods": "Périodes actives",
     "start": "Début",
