@@ -850,6 +850,10 @@ def resume_scan(scan_id: int, db: Session = Depends(get_db), current_user: User 
     
     # Reset status to pending
     scan.status = ScanStatus.PENDING
+    # Clear terminal fields from the previous run; resume is a new attempt.
+    scan.completed_at = None
+    scan.error_message = None
+    scan.started_at = datetime.now(timezone.utc)
     db.commit()
     
     # Launch Celery task with resume flag + embeddings option
