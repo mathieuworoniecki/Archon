@@ -1,33 +1,25 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useCallback } from 'react'
 import { getStats, Stats } from '@/lib/api'
+import { usePersistedQuery } from './usePersistedQuery'
 
 export function useStats() {
-    const [stats, setStats] = useState<Stats | null>(null)
-    const [isLoading, setIsLoading] = useState(true)
-    const [error, setError] = useState<string | null>(null)
-
-    const fetchStats = useCallback(async () => {
-        try {
-            setIsLoading(true)
-            setError(null)
-            const data = await getStats()
-            setStats(data)
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to fetch stats')
-        } finally {
-            setIsLoading(false)
-        }
+    const fetchStats = useCallback(async (): Promise<Stats> => {
+        return await getStats()
     }, [])
 
-    useEffect(() => {
-        fetchStats()
-    }, [fetchStats])
+    const { data, isLoading, error, refetch } = usePersistedQuery<Stats>(
+        'archon_stats_cache_v1',
+        fetchStats,
+        { version: 1, maxAgeMs: 60 * 1000 },
+    )
+
+    const stats = data
 
     return {
         stats,
         isLoading,
         error,
-        refetch: fetchStats,
+        refetch,
         hasDocuments: (stats?.total_documents ?? 0) > 0
     }
 }

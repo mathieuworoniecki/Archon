@@ -6,6 +6,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
 import { API_BASE } from '@/lib/api'
 import { authFetch } from '@/lib/auth'
+import { usePersistedQuery } from '@/hooks/usePersistedQuery'
 
 export interface Project {
     name: string
@@ -37,6 +38,12 @@ interface ProjectContextValue {
 const ProjectContext = createContext<ProjectContextValue | null>(null)
 
 const STORAGE_KEY = 'archon_selected_project'
+const PROJECTS_CACHE_KEY = 'archon_projects_cache_v1'
+
+interface ProjectsResponsePayload {
+    projects: Project[]
+    documents_path: string
+}
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
     const [selectedProject, setSelectedProject] = useState<Project | null>(() => {
@@ -47,27 +54,47 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
             return null
         }
     })
-    const [projects, setProjects] = useState<Project[]>([])
-    const [documentsPath, setDocumentsPath] = useState('/documents')
-    const [isLoading, setIsLoading] = useState(true)
-
-    const fetchProjects = useCallback(async () => {
-        setIsLoading(true)
-        try {
-            const response = await authFetch(`${API_BASE}/projects/`)
-            if (response.ok) {
-                const data = await response.json()
-                setProjects(data.projects || [])
-                setDocumentsPath(data.documents_path || '/documents')
-            }
-        } catch {
-            // fetch failure results in empty project list — UI handles this gracefully
-        } finally {
-            setIsLoading(false)
+    const fetchProjects = useCallback(async (): Promise<ProjectsResponsePayload> => {
+        const response = await authFetch(`${API_BASE}/projects/`)
+        if (!response.ok) {
+            throw new Error('Failed to fetch projects')
+        }
+        const data = await response.json() as Partial<ProjectsResponsePayload>
+        return {
+            projects: Array.isArray(data.projects) ? data.projects : [],
+            documents_path: typeof data.documents_path === 'string' ? data.documents_path : '/documents',
         }
     }, [])
 
-    useEffect(() => { fetchProjects() }, [fetchProjects])
+    const {
+        data: projectsData,
+        isLoading,
+        refetch: refetchProjects,
+    } = usePersistedQuery<ProjectsResponsePayload>(PROJECTS_CACHE_KEY, fetchProjects, {
+        version: 1,
+        maxAgeMs: 10 * 60 * 1000,
+    })
+
+    const projects = projectsData?.projects ?? []
+    const documentsPath = projectsData?.documents_path ?? '/documents'
+
+    // Keep the selected project's stats up-to-date when the project list refreshes.
+    useEffect(() => {
+        if (!selectedProject) return
+        const updated = projects.find((p) => p.path === selectedProject.path) || null
+        if (!updated) return
+        const isSame =
+            updated.name === selectedProject.name &&
+            updated.path === selectedProject.path &&
+            updated.file_count === selectedProject.file_count &&
+            updated.file_count_estimated === selectedProject.file_count_estimated &&
+            updated.total_size_bytes === selectedProject.total_size_bytes &&
+            updated.last_modified === selectedProject.last_modified &&
+            updated.subdirectories === selectedProject.subdirectories
+        if (isSame) return
+        setSelectedProject(updated)
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(updated))
+    }, [projects, selectedProject])
 
     const selectProject = useCallback((project: Project) => {
         setSelectedProject(project)
@@ -87,7 +114,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
             projects,
             documentsPath,
             isLoading,
-            refetchProjects: fetchProjects,
+            refetchProjects,
         }}>
             {children}
         </ProjectContext.Provider>

@@ -3,6 +3,7 @@ import {
     checkFavoriteStatus, addFavorite, removeFavorite,
     getFavorites, Favorite
 } from '@/lib/api'
+import { loadPersisted, savePersisted } from '@/lib/persisted'
 
 interface UseFavoriteProps {
     documentId: number | null
@@ -67,25 +68,32 @@ export function useFavorite({ documentId }: UseFavoriteProps) {
 
 // Hook for managing favorites list
 export function useFavorites() {
-    const [favorites, setFavorites] = useState<Favorite[]>([])
-    const [total, setTotal] = useState(0)
+    const [cached] = useState(() => loadPersisted<{ favorites: Favorite[]; total: number }>('archon_favorites_cache_v1', {
+        version: 1,
+        maxAgeMs: 5 * 60 * 1000,
+    }))
+    const [favorites, setFavorites] = useState<Favorite[]>(() => cached?.favorites ?? [])
+    const [total, setTotal] = useState(() => cached?.total ?? 0)
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
 
     const fetchFavorites = useCallback(async (tagIds?: number[]) => {
-        setIsLoading(true)
+        setIsLoading(favorites.length === 0)
         setError(null)
 
         try {
             const response = await getFavorites(tagIds)
             setFavorites(response.favorites)
             setTotal(response.total)
+            if (!tagIds || tagIds.length === 0) {
+                savePersisted('archon_favorites_cache_v1', { favorites: response.favorites, total: response.total }, 1)
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to fetch favorites')
         } finally {
             setIsLoading(false)
         }
-    }, [])
+    }, [favorites.length])
 
     useEffect(() => {
         fetchFavorites()
