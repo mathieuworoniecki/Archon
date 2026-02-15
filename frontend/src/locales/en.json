@@ -185,7 +185,11 @@
     "startScan": "Start by scanning a folder",
     "noResultsTip": "Try broadening filters or another mode (Hybrid / Semantic).",
     "searchError": "Search failed.",
-    "retry": "Retry"
+    "retry": "Retry",
+    "preview": "Preview",
+    "density": "Density",
+    "densityComfort": "Comfort",
+    "densityCompact": "Dense"
   },
   "browse": {
     "title": "Documents",
@@ -366,6 +370,8 @@
   "chat": {
     "title": "AI Assistant",
     "ragEnabled": "RAG enabled",
+    "disabledTitle": "Chat disabled",
+    "disabledReason": "AI is not configured. Set GEMINI_API_KEY in .env and restart the Docker stack.",
     "clear": "Clear",
     "investigationAssistant": "Investigation Assistant",
     "askAboutDocs": "Ask questions about your documents.",

@@ -14,6 +14,8 @@ interface ResultGridProps {
     mode?: 'search' | 'browse'
     hasActiveFilters?: boolean
     thumbnailSize: number
+    density?: 'comfortable' | 'compact'
+    showPreview?: boolean
     /** Infinite scroll (search mode): load more when sentinel is visible */
     onLoadMore?: () => void
     hasMore?: boolean
@@ -35,20 +37,42 @@ function canThumbnail(type: string): boolean {
     return t === 'image' || t === 'pdf' || t === 'video'
 }
 
+function stripHtml(text: string): string {
+    return text.replace(/<[^>]+>/g, '')
+}
+
+function getParentFolder(path: string): string | null {
+    const normalized = (path || '').replace(/\\/g, '/')
+    const parts = normalized.split('/').filter(Boolean)
+    if (parts.length < 2) return null
+    return parts[parts.length - 2] || null
+}
+
 function ResultGridItem({
     result,
     isSelected,
     thumbnailSize,
+    density,
+    showPreview,
     onClick,
 }: {
     result: SearchResult
     isSelected: boolean
     thumbnailSize: number
+    density: 'comfortable' | 'compact'
+    showPreview: boolean
     onClick: () => void
 }) {
     const [thumbError, setThumbError] = useState(false)
     const showThumb = canThumbnail(result.file_type) && !thumbError
     const requestSize = Math.max(80, Math.min(600, Math.round(thumbnailSize * 2)))
+    const rawSnippet = (result.snippet || '').trim()
+    const previewText = useMemo(() => {
+        const snippet = rawSnippet ? stripHtml(rawSnippet).replace(/\s+/g, ' ').trim() : ''
+        if (snippet) return snippet.slice(0, 240)
+        const parent = getParentFolder(result.file_path || '')
+        return parent ? parent : (result.file_path || '').slice(0, 240)
+    }, [rawSnippet, result.file_path])
 
     useEffect(() => setThumbError(false), [result.document_id, result.file_type])
 
@@ -76,6 +100,24 @@ function ResultGridItem({
                     </div>
                 )}
 
+                {!!previewText && (
+                    <div
+                        className={cn(
+                            'absolute inset-x-0 bottom-0 px-2 pb-2 pt-6 text-[10px] leading-snug text-white/90',
+                            'bg-gradient-to-t from-black/80 via-black/40 to-transparent',
+                            'transition-opacity',
+                            showPreview ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                        )}
+                    >
+                        <div className={cn(
+                            'overflow-hidden',
+                            density === 'compact' ? 'max-h-[34px]' : 'max-h-[44px]'
+                        )}>
+                            {previewText}
+                        </div>
+                    </div>
+                )}
+
                 <div className="absolute left-2 top-2 flex items-center gap-1.5">
                     <Badge variant="secondary" className="text-[10px] uppercase tracking-wide">
                         {result.file_type}
@@ -83,9 +125,15 @@ function ResultGridItem({
                 </div>
             </div>
 
-            <div className="p-2">
+            <div className={cn('p-2', density === 'compact' && 'p-1.5')}>
                 <p className="text-xs font-medium truncate">{result.file_name}</p>
-                <p className="mt-0.5 text-[10px] text-muted-foreground truncate" title={result.file_path}>
+                <p
+                    className={cn(
+                        'mt-0.5 text-[10px] text-muted-foreground truncate',
+                        density === 'compact' && 'hidden md:block'
+                    )}
+                    title={result.file_path}
+                >
                     {result.file_path}
                 </p>
             </div>
@@ -102,6 +150,8 @@ export function ResultGrid({
     mode = 'search',
     hasActiveFilters = false,
     thumbnailSize,
+    density = 'comfortable',
+    showPreview = true,
     onLoadMore,
     hasMore = false,
     isLoadingMore = false,
@@ -127,13 +177,14 @@ export function ResultGrid({
 
     const gridTemplateColumns = useMemo(() => {
         const px = Math.max(90, Math.min(340, Math.round(thumbnailSize)))
-        return `repeat(auto-fill, minmax(${px}px, 1fr))`
-    }, [thumbnailSize])
+        const minPx = density === 'compact' ? Math.max(80, px - 30) : px
+        return `repeat(auto-fill, minmax(${minPx}px, 1fr))`
+    }, [density, thumbnailSize])
 
     if (isLoading) {
         const skeletonCols = 12
         return (
-            <div className="p-4 grid gap-3" style={{ gridTemplateColumns }}>
+            <div className={cn('p-4 grid', density === 'compact' ? 'gap-2' : 'gap-3')} style={{ gridTemplateColumns }}>
                 {Array.from({ length: skeletonCols }).map((_, idx) => (
                     <div key={idx} className="rounded-lg border bg-card/20 overflow-hidden">
                         <div className="bg-muted/30 animate-pulse" style={{ aspectRatio: '1 / 1' }} />
@@ -175,13 +226,15 @@ export function ResultGrid({
     }
 
     const gridContent = (
-        <div className="p-4 grid gap-3" style={{ gridTemplateColumns }}>
+        <div className={cn('p-4 grid', density === 'compact' ? 'gap-2' : 'gap-3')} style={{ gridTemplateColumns }}>
             {results.map((result) => (
                 <ResultGridItem
                     key={result.document_id}
                     result={result}
                     isSelected={selectedId === result.document_id}
                     thumbnailSize={thumbnailSize}
+                    density={density}
+                    showPreview={showPreview}
                     onClick={() => onSelect(result)}
                 />
             ))}

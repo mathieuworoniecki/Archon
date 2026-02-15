@@ -185,7 +185,11 @@
     "startScan": "Commencez par scanner un dossier",
     "noResultsTip": "Essayez d’élargir les filtres ou un autre mode (Hybride / Sémantique).",
     "searchError": "La recherche a échoué.",
-    "retry": "Réessayer"
+    "retry": "Réessayer",
+    "preview": "Aperçu",
+    "density": "Densité",
+    "densityComfort": "Confort",
+    "densityCompact": "Dense"
   },
   "browse": {
     "title": "Documents",
@@ -366,6 +370,8 @@
   "chat": {
     "title": "Assistant IA",
     "ragEnabled": "RAG activé",
+    "disabledTitle": "Chat IA désactivé",
+    "disabledReason": "AI non configurée. Renseignez GEMINI_API_KEY dans .env puis redémarrez la stack Docker.",
     "clear": "Effacer",
     "investigationAssistant": "Assistant d'Investigation",
     "askAboutDocs": "Posez des questions sur vos documents.",

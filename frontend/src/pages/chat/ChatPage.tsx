@@ -96,6 +96,7 @@ export function ChatPage() {
     const [isLoading, setIsLoading] = useState(false)
     const [isStreaming, setIsStreaming] = useState(false)
     const [chatError, setChatError] = useState<string | null>(null)
+    const [chatConfig, setChatConfig] = useState<{ enabled: boolean; reason?: string | null } | null>(null)
     const [showSidebar, setShowSidebar] = useState(true)
     const [highlightedSource, setHighlightedSource] = useState<number | null>(null)
     const lastUserInputRef = useRef<string>('')
@@ -104,6 +105,8 @@ export function ChatPage() {
     const scrollRef = useRef<HTMLDivElement>(null)
     const navigate = useNavigate()
     const { t } = useTranslation()
+
+    const chatEnabled = chatConfig?.enabled ?? true
 
     // Derived state from conversations
     const activeConvo = conversations.find(c => c.id === activeId) || conversations[0]
@@ -114,6 +117,33 @@ export function ChatPage() {
     useEffect(() => {
         saveConversations(conversations)
     }, [conversations])
+
+    // Check whether chat is configured/enabled (GEMINI_API_KEY etc.)
+    useEffect(() => {
+        let cancelled = false
+
+        authFetch('/api/chat/config')
+            .then(async (res) => {
+                if (!res.ok) throw new Error('chat_config_failed')
+                return res.json()
+            })
+            .then((data) => {
+                if (cancelled) return
+                if (data && typeof data.enabled === 'boolean') {
+                    setChatConfig(data)
+                } else {
+                    setChatConfig({ enabled: true })
+                }
+            })
+            .catch(() => {
+                // Backward compatible: if the endpoint doesn't exist yet, assume enabled.
+                if (!cancelled) setChatConfig({ enabled: true })
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [])
 
     // Auto-scroll on new messages
     useEffect(() => {
@@ -196,6 +226,10 @@ export function ChatPage() {
     const sendMessage = async () => {
         const q = input.trim()
         if (!q || isLoading) return
+        if (!chatEnabled) {
+            setChatError(chatConfig?.reason || t('chat.disabledReason'))
+            return
+        }
         setChatError(null)
         lastUserInputRef.current = q
         setInput('')
@@ -522,6 +556,20 @@ export function ChatPage() {
                     </div>
                 </div>
 
+                {!chatEnabled && (
+                    <div className="mb-4 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3">
+                        <div className="flex items-start gap-2 text-amber-400">
+                            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                            <div>
+                                <p className="text-sm font-medium">{t('chat.disabledTitle')}</p>
+                                <p className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap">
+                                    {chatConfig?.reason || t('chat.disabledReason')}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* Messages */}
                 <Card className="flex-1 mb-4 p-4 overflow-hidden">
                     <ScrollArea className="h-full pr-4">
@@ -539,9 +587,14 @@ export function ChatPage() {
                                             <button
                                                 key={i}
                                                 onClick={() => {
+                                                    if (!chatEnabled) {
+                                                        setChatError(chatConfig?.reason || t('chat.disabledReason'))
+                                                        return
+                                                    }
                                                     setInput(suggestion.text)
                                                     setTimeout(() => sendMessage(), 100)
                                                 }}
+                                                disabled={!chatEnabled}
                                                 className="p-3 text-xs rounded-lg border bg-card/50 hover:bg-accent/50 transition-colors text-left flex items-start gap-2"
                                             >
                                                 <span>{suggestion.icon}</span>
@@ -653,9 +706,9 @@ export function ChatPage() {
                         onKeyPress={handleKeyPress}
                         placeholder={t('chat.placeholder')}
                         className="flex-1"
-                        disabled={isLoading}
+                        disabled={isLoading || !chatEnabled}
                     />
-                    <Button onClick={sendMessage} disabled={isLoading || !input.trim()}>
+                    <Button onClick={sendMessage} disabled={isLoading || !input.trim() || !chatEnabled}>
                         <Send className="h-4 w-4" />
                     </Button>
                 </div>

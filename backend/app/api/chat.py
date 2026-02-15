@@ -47,6 +47,11 @@ class ChatResponse(BaseModel):
     rag_enabled: bool
 
 
+class ChatConfigOut(BaseModel):
+    enabled: bool
+    reason: Optional[str] = None
+
+
 class SummarizeRequest(BaseModel):
     document_id: int
 
@@ -59,6 +64,22 @@ class QuestionRequest(BaseModel):
 def _get_session_id(x_session_id: Optional[str] = Header(None)) -> str:
     """Extract session ID from request header, fallback to 'default'."""
     return x_session_id or "default"
+
+
+@router.get("/config", response_model=ChatConfigOut)
+async def chat_config(current_user: User = Depends(get_current_user)):
+    """
+    Return whether the chat service is configured/enabled.
+
+    The UI uses this to disable chat gracefully when GEMINI_API_KEY is missing,
+    instead of failing on the first request.
+    """
+    if not settings.gemini_api_key:
+        return ChatConfigOut(
+            enabled=False,
+            reason="AI non configuree: definissez GEMINI_API_KEY dans .env (ou dans les variables d'environnement).",
+        )
+    return ChatConfigOut(enabled=True, reason=None)
 
 
 @router.post("/", response_model=ChatResponse)

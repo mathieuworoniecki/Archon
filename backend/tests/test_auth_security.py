@@ -78,6 +78,9 @@ class TestAllRoutesRequireAuth:
     def test_chat_requires_auth(self, client):
         assert client.post("/api/chat/", json={"message": "hello"}).status_code == 401
 
+    def test_chat_config_requires_auth(self, client):
+        assert client.get("/api/chat/config").status_code == 401
+
     def test_chat_summarize_requires_auth(self, client):
         assert client.post("/api/chat/summarize", json={"document_ids": [1]}).status_code == 401
 

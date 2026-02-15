@@ -34,6 +34,8 @@ import {
     Columns2,
     ZoomOut,
     ZoomIn,
+    Eye,
+    EyeOff,
     X,
 } from 'lucide-react'
 import {
@@ -45,6 +47,7 @@ import {
 
 type QueryMode = 'filename' | 'content'
 type DocumentsLayout = 'split' | 'grid'
+type GridDensity = 'comfortable' | 'compact'
 
 type PendingViewerSelection =
     | { kind: 'index'; index: number }
@@ -52,6 +55,8 @@ type PendingViewerSelection =
 
 const DOCUMENTS_LAYOUT_KEY = 'archon_documents_layout'
 const GRID_THUMB_SIZE_KEY = 'archon_grid_thumb_size'
+const GRID_DENSITY_KEY = 'archon_grid_density'
+const GRID_PREVIEW_KEY = 'archon_grid_show_preview'
 const SEARCH_PAGE_SIZE_KEY = 'archon_search_page_size'
 const DOCUMENTS_SIDEBAR_KEY = 'archon_documents_sidebar_visible'
 
@@ -123,6 +128,25 @@ export function HomePage() {
             // ignore
         }
         return 160
+    })
+    const [gridDensity, setGridDensity] = useState<GridDensity>(() => {
+        try {
+            const saved = localStorage.getItem(GRID_DENSITY_KEY)
+            if (saved === 'compact' || saved === 'comfortable') return saved
+        } catch {
+            // ignore
+        }
+        return 'comfortable'
+    })
+    const [gridShowPreview, setGridShowPreview] = useState<boolean>(() => {
+        try {
+            const saved = localStorage.getItem(GRID_PREVIEW_KEY)
+            if (saved === '0') return false
+            if (saved === '1') return true
+        } catch {
+            // ignore
+        }
+        return true
     })
     const [searchPageSize, setSearchPageSize] = useState<number>(() => {
         try {
@@ -215,6 +239,22 @@ export function HomePage() {
             // ignore
         }
     }, [gridThumbnailSize])
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(GRID_DENSITY_KEY, gridDensity)
+        } catch {
+            // ignore
+        }
+    }, [gridDensity])
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(GRID_PREVIEW_KEY, gridShowPreview ? '1' : '0')
+        } catch {
+            // ignore
+        }
+    }, [gridShowPreview])
 
     useEffect(() => {
         try {
@@ -1186,6 +1226,49 @@ export function HomePage() {
                                                 <ZoomIn className="h-3.5 w-3.5 text-muted-foreground" />
                                             </div>
 
+                                            <Button
+                                                variant={gridShowPreview ? 'default' : 'outline'}
+                                                size="sm"
+                                                className="h-7 w-7 p-0"
+                                                onClick={() => setGridShowPreview((prev) => !prev)}
+                                                title={t('home.preview')}
+                                                aria-label={t('home.preview')}
+                                                aria-pressed={gridShowPreview}
+                                            >
+                                                {gridShowPreview ? (
+                                                    <Eye className="h-3.5 w-3.5" />
+                                                ) : (
+                                                    <EyeOff className="h-3.5 w-3.5" />
+                                                )}
+                                            </Button>
+
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="h-7 px-2 text-[11px]"
+                                                        title={t('home.density')}
+                                                    >
+                                                        {gridDensity === 'compact' ? t('home.densityCompact') : t('home.densityComfort')}
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end">
+                                                    <DropdownMenuItem
+                                                        onClick={() => setGridDensity('comfortable')}
+                                                        className={cn(gridDensity === 'comfortable' && 'bg-accent')}
+                                                    >
+                                                        {t('home.densityComfort')}
+                                                    </DropdownMenuItem>
+                                                    <DropdownMenuItem
+                                                        onClick={() => setGridDensity('compact')}
+                                                        className={cn(gridDensity === 'compact' && 'bg-accent')}
+                                                    >
+                                                        {t('home.densityCompact')}
+                                                    </DropdownMenuItem>
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
+
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
                                                     <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]">
@@ -1271,6 +1354,8 @@ export function HomePage() {
                                         mode={listMode}
                                         hasActiveFilters={hasActiveFilters}
                                         thumbnailSize={gridThumbnailSize}
+                                        density={gridDensity}
+                                        showPreview={gridShowPreview}
                                         onLoadMore={!usesBrowseDataset ? loadMore : undefined}
                                         hasMore={!usesBrowseDataset ? hasMore : false}
                                         isLoadingMore={!usesBrowseDataset ? isLoadingMore : false}
