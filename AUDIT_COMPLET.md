@@ -2584,14 +2584,10 @@ Features:
 
 ### 1. Pas de Toast / Feedback Instantané
 
-**Problème** : Toutes les actions (suppression, rename, annulation, lancement de scan) n'ont aucun feedback visuel. L'utilisateur clique et ne sait pas si ça a marché.
-**Solution** : Implémenter un système de `Toast` (notifications éphémères en bas de l'écran).
-
-```
-✅ "Scan lancé" • ✅ "Scan annulé" • ⚠️ "Erreur connexion" • 🗑️ "Scan supprimé"
-```
-
-**Impact** : Énorme — c'est LE pattern qui rend une app vivante et réactive.
+**État** : Corrigé.
+**Maintenant** :
+- toasts globaux via `sonner` (Toaster dans `frontend/src/main.tsx`),
+- feedback sur actions clés (suppression avec undo, lancement/reprise scan, erreurs, etc.).
 
 ---
 
@@ -2608,20 +2604,8 @@ Features:
 
 ### 3. Scan Dialog trop Primitif
 
-**Problème actuel** :
-
-- Pas de prévisualisation avant le scan : combien de fichiers vont être traités ? Quels types ?
-- L'API `estimateScan()` existe dans `api.ts` mais n'est **jamais utilisée** dans le dialog !
-- Le coût estimé des embeddings est calculé côté backend mais jamais affiché
-
-**Solution** : Quand le dialog s'ouvre, appeler `estimateScan(path)` et afficher :
-
-```
-📦 ~134 000 fichiers détectés
-├── 42 000 PDF  •  68 000 Images  •  24 000 Textes
-├── 💾 Taille estimée : 30 GB
-└── 🧠 Embeddings : ~$0.13 (free tier disponible ✓)
-```
+**État** : Corrigé.
+**Maintenant** : `ScanConfigPanel` utilise `estimateScan()` et affiche une estimation intelligente (avec `+` si échantillonnée), par type, avec taille estimée.
 
 ---
 
@@ -2813,19 +2797,18 @@ Format cible livré :
 
 ### 14. Pas de Mode Hors-Ligne / Cache Local
 
-**Problème** : Chaque navigation recharge tout depuis l'API. Si le backend est lent ou tombe, l'app est morte.
-**Solution** : `react-query` ou `SWR` avec cache stale-while-revalidate. Les données déjà chargées restent visibles.
+**État** : Corrigé (cache SWR-like).
+**Maintenant** : cache stale-while-revalidate persistant (localStorage) via `frontend/src/hooks/usePersistedQuery.ts` + `frontend/src/lib/persisted.ts` pour Projects/Stats/Favoris: les données déjà chargées restent visibles même si l'API ralentit/tombe.
 
 ---
 
 ### 15. Favoris sans Organisation Intelligente
 
-**Problème** : Les favoris sont une liste plate. Avec 100+ favoris, c'est inutilisable.
-**Solution** :
-
-- Dossiers de favoris / collections
-- Vue "récemment ajoutés" vs "les plus consultés"
-- Export des favoris en PDF/ZIP
+**État** : Corrigé (MVP).
+**Maintenant** :
+- tags,
+- collections (localStorage) pour organiser,
+- export CSV disponible sur les listes (résultats), et exports existants côté backend.
 
 ---
 
@@ -2837,11 +2820,13 @@ Déposer un dossier sur la page projets → le scan démarre automatiquement.
 
 ### 17. Aperçu au Survol (Hover Preview)
 
-Survoler un nom de fichier dans les résultats → tooltip avec aperçu (miniature pour images, premières lignes pour textes).
+**État** : Corrigé.
+Survoler un résultat → tooltip avec aperçu (miniature pour images, snippet/chemin pour le reste) via `frontend/src/components/search/ResultCard.tsx`.
 
 ### 18. Dark/Light Toggle Animé
 
-Le toggle theme actuel est brutal. Ajouter une transition CSS `color-scheme` douce.
+**État** : Corrigé.
+**Maintenant** : thème clair + transitions douces sur toggle via `frontend/src/hooks/useTheme.tsx` + `frontend/src/index.css`.
 
 ### 19. Indicateurs de Santé du Système
 
@@ -2850,7 +2835,8 @@ Un indicateur de santé est affiché dans le footer, avec détail par service et
 
 ### 20. Onboarding Guidé pour Nouveaux Utilisateurs
 
-Premier lancement → tour guidé avec 3-4 étapes : "Voici vos projets", "Lancez un scan", "Explorez vos documents".
+**État** : Corrigé.
+**Maintenant** : onboarding guidé (dialog) au premier lancement si aucun document, via `frontend/src/components/OnboardingDialog.tsx`.
 
 ---
 
@@ -2858,8 +2844,8 @@ Premier lancement → tour guidé avec 3-4 étapes : "Voici vos projets", "Lance
 
 | #   | Feature                 | Impact     | Effort      | Ratio | Etat |
 | --- | ----------------------- | ---------- | ----------- | ----- | ---- |
-| 1   | Toast / Feedback        | ⭐⭐⭐⭐⭐ | 🔧 Faible   | 🏆    | a faire |
-| 3   | Scan Estimate Preview   | ⭐⭐⭐⭐⭐ | 🔧 Faible   | 🏆    | a faire |
+| 1   | Toast / Feedback        | ⭐⭐⭐⭐⭐ | 🔧 Faible   | 🏆    | fait |
+| 3   | Scan Estimate Preview   | ⭐⭐⭐⭐⭐ | 🔧 Faible   | 🏆    | fait |
 | 2   | Confirm + Undo Delete   | ⭐⭐⭐⭐   | 🔧 Faible   | 🏆    | fait |
 | 5   | Types consolidés        | ⭐⭐⭐     | 🔧 Faible   | 🏆    | fait |
 | 4   | SSE Auto-Reconnect      | ⭐⭐⭐⭐   | 🔧🔧 Moyen  | ⭐⭐  | fait |
@@ -2870,7 +2856,7 @@ Premier lancement → tour guidé avec 3-4 étapes : "Voici vos projets", "Lance
 | 11  | Command Palette         | ⭐⭐⭐⭐   | 🔧🔧🔧 Haut | ⭐    | fait |
 | 6   | Timeline → Cockpit      | ⭐⭐⭐     | 🔧🔧 Moyen  | ⭐    | fait |
 | 8   | Chat Streaming          | ⭐⭐⭐⭐   | 🔧🔧🔧 Haut | ⭐    | fait |
-| 14  | Cache SWR               | ⭐⭐⭐     | 🔧🔧🔧 Haut | ○     | partiel |
+| 14  | Cache SWR               | ⭐⭐⭐     | 🔧🔧🔧 Haut | ○     | fait |
 | 19  | Health Indicator        | ⭐⭐       | 🔧 Faible   | ⭐    | fait |
 
 ---
@@ -2879,7 +2865,7 @@ Premier lancement → tour guidé avec 3-4 étapes : "Voici vos projets", "Lance
 
 ### Sprint 1 — Quick Wins (1-2 jours)
 
-1. **Toast system** (sonner ou react-hot-toast) — `partiel`
+1. **Toast system** (sonner) — `fait`
 2. **estimateScan()** dans le dialog de scan — `fait`
 3. **Confirm dialog** avant suppression — `fait`
 4. **Consolider les types** (`ScanRecord` → un seul endroit) — `fait`
@@ -2899,4 +2885,4 @@ Premier lancement → tour guidé avec 3-4 étapes : "Voici vos projets", "Lance
 12. **Chat streaming** SSE — `fait`
 13. **Loading skeletons** — `fait`
 14. **Breadcrumbs** — `fait`
-15. **Hover preview** documents — `a faire`
+15. **Hover preview** documents — `fait`
