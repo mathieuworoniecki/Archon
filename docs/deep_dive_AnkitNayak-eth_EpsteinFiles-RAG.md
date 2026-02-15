@@ -11,6 +11,29 @@
   améliorent le plus la factualité et la pertinence.
 - Identifier ce qui est transposable dans Archon (stack Qdrant + Meilisearch + Gemini) sans big-bang.
 
+## Stack et choix d'outils (leur repo)
+- LLM: Groq Cloud (LLaMA 3.3).
+- Embeddings: Sentence Transformers (`all-MiniLM-L6-v2`).
+- Vector DB: Chroma.
+- Pipeline RAG: scripts Python + (souvent) primitives LangChain (splitter / retriever MMR).
+- UI: Streamlit (app.py).
+- API: FastAPI (`api/main.py`).
+- Dataset: HuggingFace `teyler/epstein-files-20k`.
+- Option: embeddings/Chroma pré-calculés publiés sur HuggingFace (drop-in).
+
+## Structure et pipeline (ce qu'ils font "mieux" en lisibilité)
+Le repo est conçu comme une démo "pipeline-first", avec 3 zones très lisibles:
+- `ingest/`: scripts de préparation données en étapes (download -> clean -> chunk -> embed).
+- `api/`: backend FastAPI minimal pour poser une question.
+- `app.py`: UI Streamlit (chat simple).
+
+Leur README impose un mental model "stages" explicite:
+1. Download dataset
+2. Clean & reconstruct (recolle des fragments par fichier source)
+3. Chunking (avec overlap)
+4. Embedding + index Chroma
+Puis: retrieval MMR -> réponse "grounded-only".
+
 ## Ce qui est réutilisable dans Archon
 - Pipeline “stages” très explicite: `clean -> chunk -> embed -> retrieve -> answer`.
   - À reprendre surtout en *documentation* + “contrats” entre étapes (inputs/outputs, invariants).
@@ -35,6 +58,12 @@
 - Modèle embeddings local `all-MiniLM-L6-v2` (priorité qualité “best results”, pas priorité “local fast”).
 - Streamlit UI (Archon a déjà un frontend complet).
 - Scripts dataset spécifiques (HuggingFace “Epstein Files 20K”).
+
+## Ce qu'Archon fait déjà mieux (à préserver)
+- Forensics: scan de fichiers réels multi-formats (PDF/images/videos/emails/archives) plutôt qu'un dataset texte.
+- Sécurité produit: auth + RBAC + audit log.
+- Recherche: hybride lexical (Meili) + sémantique (Qdrant) + rerank (feature-flag).
+- Investigation UI: workspace documents, timeline, entités, graphe, export.
 
 ## Risques
 - Technique:
@@ -63,4 +92,3 @@
 - Go (réutiliser les *concepts* de préparation/normalisation + pipeline stages + QA).
 - Justification:
   - Les gains sont majoritairement sur “qualité retrieval” et “grounding”, compatibles avec le plan Archon (P0/P1).
-

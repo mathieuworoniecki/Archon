@@ -24,10 +24,9 @@ Concept cle:
 - Un "projet" = un dossier de premier niveau dans `DOCUMENTS_PATH`.
 - Un "scan" = traitement asynchrone de ce projet.
 - Les documents scannes deviennent consultables dans:
-  - recherche 3 panneaux (filtres + liste + viewer),
+  - workspace Documents (filtres + liste + viewer + modes liste/grille/galerie),
   - timeline,
   - graphe d'entites,
-  - galerie media,
   - chat RAG.
 
 ## 2. Architecture
@@ -65,7 +64,7 @@ Les autres services (Postgres/Meili/Qdrant/Redis) sont internes au reseau Docker
    - indexation Meilisearch,
    - vectorisation Qdrant (selon config),
    - extraction d'entites (NER).
-5. Les pages recherche/timeline/graphe/galerie se nourrissent de ces index.
+5. Les pages Documents/Timeline/Graphe/Chat se nourrissent de ces index.
 
 ## 4. Installation "copier-coller" (recommandee)
 
@@ -154,6 +153,10 @@ UX principale:
 - panneau gauche: filtres/tri/recherche,
 - panneau central: liste des documents,
 - panneau droit: viewer/preview du document selectionne.
+
+Note UX:
+- Il n'y a plus de page "Analyse" separee: l'analyse fait partie du workspace Documents.
+- Il n'y a plus de page "Galerie" separee: utilisez le mode Galerie dans Documents.
 
 ### RAG (qualite, roadmap)
 
