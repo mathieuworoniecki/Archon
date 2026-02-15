@@ -832,6 +832,48 @@ def resume_scan(scan_id: int, db: Session = Depends(get_db), current_user: User 
             status_code=400, 
             detail=f"Cannot resume scan with status: {scan.status.value}"
         )
+
+    # Avoid spawning a duplicate Celery task if the previous one is still active.
+    # This can happen if the scan was marked FAILED/CANCELLED due to a transient API restart,
+    # while the worker kept running (acks_late + long tasks).
+    if scan.celery_task_id:
+        task_id = scan.celery_task_id
+        is_active = False
+
+        try:
+            inspector = celery_app.control.inspect(timeout=1.0)
+            active = inspector.active()
+            # If Celery is reachable, inspect active/reserved/scheduled.
+            if active is not None:
+                reserved = inspector.reserved() or {}
+                scheduled = inspector.scheduled() or {}
+                known_task_ids: set[str] = set()
+                for bucket in (active or {}, reserved, scheduled):
+                    for tasks in (bucket or {}).values():
+                        for task in tasks or []:
+                            if isinstance(task, dict):
+                                tid = task.get("id")
+                                if isinstance(tid, str) and tid:
+                                    known_task_ids.add(tid)
+                is_active = task_id in known_task_ids
+        except Exception:
+            # Best-effort only: fall back to backend state check below.
+            pass
+
+        if not is_active:
+            try:
+                state = (AsyncResult(task_id, app=celery_app).state or "").upper()
+                is_active = state in {"PROGRESS", "STARTED", "RETRY"}
+            except Exception:
+                pass
+
+        if is_active:
+            scan.status = ScanStatus.RUNNING
+            scan.error_message = None
+            scan.completed_at = None
+            db.commit()
+            db.refresh(scan)
+            return scan
     
     # Cancel any other running/pending scans for the same project path
     other_running = db.query(Scan).filter(
