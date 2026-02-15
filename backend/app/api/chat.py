@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from ..database import get_db
 from ..models import Document, User
 from ..services.ai_chat import get_chat_service, clear_session
@@ -19,6 +20,17 @@ from ..utils.auth import get_current_user
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+settings = get_settings()
+
+
+def _ensure_ai_configured() -> None:
+    # Fail soft: users should get a clear actionable error instead of a 500
+    # when Gemini is not configured.
+    if not settings.gemini_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="AI non configuree: definissez GEMINI_API_KEY dans .env (ou dans les variables d'environnement).",
+        )
 
 
 class ChatRequest(BaseModel):
@@ -60,6 +72,7 @@ async def chat(
     Send a message to the AI assistant with optional RAG.
     Session isolated via X-Session-Id header. Rate limited.
     """
+    _ensure_ai_configured()
     chat_limiter.check(request)
     chat_service = get_chat_service(session_id)
     
@@ -85,6 +98,7 @@ async def chat_stream(
     - {"token": "text chunk"} for partial responses
     - {"done": true, "contexts": [...]} when complete
     """
+    _ensure_ai_configured()
     chat_limiter.check(request)
     chat_service = get_chat_service(session_id)
 
@@ -118,6 +132,7 @@ async def summarize_document(
     """
     Generate a summary of a specific document. Rate limited.
     """
+    _ensure_ai_configured()
     document_ai_limiter.check(request)
     document = db.query(Document).filter(Document.id == body.document_id).first()
     if not document:
@@ -149,6 +164,7 @@ async def ask_question_about_document(
     """
     Ask a specific question about a document. Rate limited.
     """
+    _ensure_ai_configured()
     document_ai_limiter.check(request)
     document = db.query(Document).filter(Document.id == body.document_id).first()
     if not document:
