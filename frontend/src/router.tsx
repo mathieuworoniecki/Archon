@@ -235,7 +235,7 @@ function RootLayout() {
                 <div className="container mx-auto px-4 h-14 flex items-center justify-between">
                     <div className="flex items-center gap-5">
                         <div className="flex items-center gap-2.5">
-                            <Link to="/" className="flex items-center gap-2.5">
+                            <Link to="/scans" className="flex items-center gap-2.5">
                                 <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[rgba(245,158,11,0.1)] border border-[rgba(245,158,11,0.2)]">
                                     <Shield className="h-5 w-5 text-[#F59E0B]" />
                                 </div>
@@ -361,7 +361,7 @@ function RootLayout() {
                             </div>
                         )}
 
-                        <div className="flex items-center rounded-lg border border-[rgba(255,255,255,0.08)] bg-[rgba(22,27,34,0.55)] p-0.5">
+                        <div className="flex items-center h-7 rounded-md border border-[rgba(255,255,255,0.08)] bg-[rgba(22,27,34,0.55)] px-0.5">
                             <Link to="/projects">
                                 <Button
                                     variant="ghost"
