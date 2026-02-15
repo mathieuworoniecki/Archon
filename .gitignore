@@ -48,6 +48,7 @@ AI.md
 .agent/
 .agents/
 .claude/
+CLAUDE.md
 .audit_*.json
 .audit_*.txt
 .tmp_pages_functions.json

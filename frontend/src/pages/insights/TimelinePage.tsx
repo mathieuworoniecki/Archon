@@ -192,7 +192,7 @@ export function TimelinePage() {
     const currentZoom = zoomStack.length > 0 ? zoomStack[zoomStack.length - 1] : null
     const currentGranularity: Granularity = currentZoom?.granularity || 'year'
 
-    const { data, range, isLoading, error, refetch } = useTimeline({
+    const { data, range, quality, isLoading, error, refetch } = useTimeline({
         granularity: currentGranularity,
         fileTypes: selectedFileTypes.length ? selectedFileTypes : undefined,
     })
@@ -200,6 +200,7 @@ export function TimelinePage() {
     const timelinePoints = data?.data || []
     const totalDocuments = data?.total_documents || range?.total_documents || 0
     const isInitialLoad = isLoading && !data && !range
+    const intrinsicSharePct = quality ? Math.round((quality.intrinsic_share || 0) * 100) : null
 
     const decades = useMemo(() => {
         if (!range?.min_date || !range?.max_date) return []
@@ -573,6 +574,11 @@ export function TimelinePage() {
                                             {asPercent(collapsedDatesSignal.top1Share)}{' '}
                                             {t('timeline.ofVisibleDocuments').replace('{count}', formatNumber(visibleTotal))}
                                         </Badge>
+                                        {intrinsicSharePct !== null && (
+                                            <Badge variant="outline" className="text-amber-300 border-amber-500/30">
+                                                {t('timeline.intrinsicCoverageShort').replace('{pct}', String(intrinsicSharePct))}
+                                            </Badge>
+                                        )}
                                     </div>
                                     <p className="text-sm text-muted-foreground mt-1">
                                         {t('timeline.datesCollapsedBody')}
@@ -687,6 +693,44 @@ export function TimelinePage() {
                         </CardContent>
                     </Card>
                 </div>
+
+                {quality && totalDocuments > 0 && (
+                    <Card>
+                        <CardContent className="pt-5">
+                            <div className="flex flex-wrap items-start justify-between gap-4">
+                                <div className="min-w-0">
+                                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                        {t('timeline.dateQualityTitle')}
+                                    </p>
+                                    <p className="text-sm text-muted-foreground mt-1">
+                                        {t('timeline.dateQualityBody')}
+                                    </p>
+                                    {quality.sources?.length > 0 && (
+                                        <div className="flex flex-wrap gap-2 mt-3">
+                                            {quality.sources.slice(0, 6).map((src) => (
+                                                <Badge key={src.source} variant="secondary" className="text-[10px]">
+                                                    {src.source} · {formatNumber(src.count)}
+                                                </Badge>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="shrink-0 text-right">
+                                    <div className="text-2xl font-bold">
+                                        {Math.round((quality.intrinsic_share || 0) * 100)}%
+                                    </div>
+                                    <div className="text-xs text-muted-foreground">
+                                        {t('timeline.intrinsicCoverage')}
+                                    </div>
+                                    <div className="text-[10px] text-muted-foreground mt-1">
+                                        {formatNumber(quality.intrinsic_documents)} / {formatNumber(quality.total_documents)}
+                                    </div>
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
 
                 <Card>
                     <CardContent className="pt-5">
@@ -967,7 +1011,7 @@ export function TimelinePage() {
                                                         <div className="min-w-0 pr-3">
                                                             <p className="truncate text-sm font-medium">{doc.file_name}</p>
                                                             <p className="text-xs text-muted-foreground truncate">
-                                                                {formatDate(doc.file_modified_at || doc.indexed_at, locale)}
+                                                                {formatDate(doc.document_date || doc.file_modified_at || doc.indexed_at, locale)}
                                                             </p>
                                                         </div>
                                                         <Badge variant="outline" className={typeBadgeClass(doc.file_type)}>

@@ -89,6 +89,10 @@ class Document(Base):
     
     # Timestamps
     file_modified_at = Column(DateTime, nullable=True, index=True)
+    # Forensics: best-effort "document intrinsic" date (PDF metadata, email header, EXIF, etc.).
+    # Used by Timeline and date filters; falls back to file_modified_at/indexed_at when missing.
+    document_date = Column(DateTime, nullable=True, index=True)
+    document_date_source = Column(String(32), nullable=True, index=True)
     indexed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Archive info (if extracted from an archive)

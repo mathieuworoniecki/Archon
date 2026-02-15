@@ -66,6 +66,8 @@ export interface Document {
     text_length: number
     has_ocr: boolean
     file_modified_at: string | null
+    document_date?: string | null
+    document_date_source?: string | null
     indexed_at: string
     archive_path?: string | null  // Path inside archive if extracted
 }

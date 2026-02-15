@@ -308,7 +308,11 @@
     "noDocumentsInPeriod": "No document found for this period with current filters.",
     "openSearchWorkspace": "Open search",
     "openDocument": "Open document",
-    "docsShown": "{count} document(s) in period"
+    "docsShown": "{count} document(s) in period",
+    "dateQualityTitle": "Date quality",
+    "dateQualityBody": "The timeline uses intrinsic dates first (PDF/EXIF/Email), otherwise it falls back to filesystem modified time or indexing time. A low % often means filesystem timestamps dominate (copy/import).",
+    "intrinsicCoverage": "Intrinsic dates",
+    "intrinsicCoverageShort": "{pct}% intrinsic"
   },
   "entities": {
     "title": "Entity Directory",
@@ -563,6 +567,11 @@
     "postScanExportUnavailable": "No exportable documents were found for this scan. Opening search instead.",
     "postScanExportFallback": "Export is not available right now. Opening search instead.",
     "postScanExportReady": "CSV export ready ({count} files).",
+    "enrichDatesTitle": "Enrich dates",
+    "enrichDatesBody": "Extracts intrinsic dates (PDF/EXIF/Email) to improve the Timeline and date filters.",
+    "enrichDatesAction": "Enrich",
+    "enrichDatesEnqueueing": "Starting...",
+    "enrichDatesRequiresCompletion": "Available once the scan is completed",
     "unknownType": "Unknown",
     "toast": {
       "startFailed": "Failed to start scan",
@@ -573,7 +582,9 @@
       "deleted": "Scan deleted",
       "nameRequired": "Scan name is required",
       "renamed": "Scan renamed",
-      "renameFailed": "Failed to rename"
+      "renameFailed": "Failed to rename",
+      "enrichDatesEnqueued": "Date enrichment enqueued",
+      "enrichDatesFailed": "Failed to enqueue date enrichment"
     }
   },
   "viewer": {

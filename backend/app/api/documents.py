@@ -45,13 +45,13 @@ def list_documents(
     Supports:
     - Multi-select file types
     - Project path prefix filter
-    - Date range filters (on file_modified_at, with indexed_at fallback)
+    - Date range filters (document_date -> file_modified_at -> indexed_at)
     - Text search on file name (case-insensitive)
     - Multiple sort options
     - Pagination with total count
     """
     query = db.query(Document)
-    source_date = func.coalesce(Document.file_modified_at, Document.indexed_at)
+    source_date = func.coalesce(Document.document_date, Document.file_modified_at, Document.indexed_at)
     
     # Filter by scan
     if scan_id:
@@ -75,7 +75,7 @@ def list_documents(
     if file_types:
         query = query.filter(Document.file_type.in_(file_types))
     
-    # Filter by date range (file modification date)
+    # Filter by date range (document_date fallback to filesystem/index date)
     if date_from:
         query = query.filter(source_date >= date_from)
     if date_to:

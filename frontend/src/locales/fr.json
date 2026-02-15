@@ -308,7 +308,11 @@
     "noDocumentsInPeriod": "Aucun document trouvé pour cette période avec les filtres actifs.",
     "openSearchWorkspace": "Ouvrir la recherche",
     "openDocument": "Ouvrir un document",
-    "docsShown": "{count} document(s) dans la période"
+    "docsShown": "{count} document(s) dans la période",
+    "dateQualityTitle": "Qualité des dates",
+    "dateQualityBody": "La timeline utilise d'abord les dates intrinsèques (PDF/EXIF/Email), sinon elle retombe sur la date du fichier ou l'indexation. Un faible % signifie souvent que les timestamps filesystem dominent (copie/import).",
+    "intrinsicCoverage": "Dates intrinsèques",
+    "intrinsicCoverageShort": "{pct}% intrinsèque"
   },
   "entities": {
     "title": "Répertoire des Entités",
@@ -563,6 +567,11 @@
     "postScanExportUnavailable": "Aucun document exportable trouvé pour ce scan. Ouverture de la recherche.",
     "postScanExportFallback": "Export indisponible pour le moment. Ouverture de la recherche.",
     "postScanExportReady": "Export CSV prêt ({count} fichiers).",
+    "enrichDatesTitle": "Enrichir les dates",
+    "enrichDatesBody": "Extrait les dates internes (PDF/EXIF/Email) pour améliorer la Timeline et les filtres de dates.",
+    "enrichDatesAction": "Enrichir",
+    "enrichDatesEnqueueing": "Lancement...",
+    "enrichDatesRequiresCompletion": "Disponible une fois le scan terminé",
     "unknownType": "Inconnu",
     "toast": {
       "startFailed": "Échec du lancement du scan",
@@ -573,7 +582,9 @@
       "deleted": "Scan supprimé",
       "nameRequired": "Le nom du scan est requis",
       "renamed": "Scan renommé",
-      "renameFailed": "Échec du renommage"
+      "renameFailed": "Échec du renommage",
+      "enrichDatesEnqueued": "Enrichissement des dates lancé",
+      "enrichDatesFailed": "Échec de l'enrichissement des dates"
     }
   },
   "viewer": {

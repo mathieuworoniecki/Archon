@@ -18,7 +18,7 @@ from ..database import get_db
 from ..models import Scan, ScanStatus, User
 from ..schemas import ScanCreate, ScanOut, ScanProgress
 from ..workers.celery_app import celery_app
-from ..workers.tasks import run_scan
+from ..workers.tasks import run_scan, enrich_document_dates
 from ..utils.auth import get_current_user, require_role
 from ..utils.paths import normalize_scan_path
 from ..services.ocr import get_ocr_service, OCRService
@@ -922,6 +922,26 @@ def list_interrupted_scans(db: Session = Depends(get_db), current_user: User = D
         Scan.status.in_([ScanStatus.FAILED, ScanStatus.CANCELLED])
     ).order_by(Scan.created_at.desc()).all()
     return scans
+
+
+@router.post("/{scan_id}/enrich-dates")
+def enrich_scan_dates(scan_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Enqueue a background job to backfill intrinsic document dates for this scan.
+
+    This improves the Timeline and date filters by preferring dates extracted from the document
+    itself (PDF metadata, EXIF, email headers) rather than filesystem timestamps.
+    """
+    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    try:
+        task = enrich_document_dates.delay(scan_id, request_id=get_request_id())
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Failed to enqueue enrich job: {exc}")
+
+    return {"status": "enqueued", "scan_id": scan_id, "task_id": task.id}
 
 
 @router.post("/factory-reset")

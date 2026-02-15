@@ -31,6 +31,7 @@ from ..services.meilisearch import get_meilisearch_service
 from ..services.qdrant import get_qdrant_service
 from ..services.embeddings import get_embeddings_service
 from ..services.ner_service import get_ner_service
+from ..services.document_dates import extract_document_date
 from ..utils.hashing import compute_fast_hash, compute_file_hashes
 from ..utils.paths import normalize_scan_path
 from ..config import get_settings
@@ -118,6 +119,10 @@ def extract_file_safe(file_info: Dict, ocr_service: OCRService) -> Optional[Dict
     try:
         metadata = ocr_service.get_file_metadata(file_path)
 
+        intrinsic_date = extract_document_date(file_path, file_type)
+        document_date = intrinsic_date[0] if intrinsic_date else None
+        document_date_source = intrinsic_date[1] if intrinsic_date else None
+
         # Defer OCR for video and image — extract on access, not bulk scan
         if file_type == DocumentType.VIDEO:
             text_content = "[VIDEO] OCR déféré — sera extrait à l'accès"
@@ -136,6 +141,8 @@ def extract_file_safe(file_info: Dict, ocr_service: OCRService) -> Optional[Dict
             "metadata": metadata,
             "text_content": text_content,
             "used_ocr": used_ocr,
+            "document_date": document_date,
+            "document_date_source": document_date_source,
         }
     except Exception as e:
         return {"error": str(e), **file_info}
@@ -471,7 +478,13 @@ def run_scan(
                             text_content=text_content,
                             text_length=len(text_content),
                             has_ocr=1 if used_ocr else 0,
-                            file_modified_at=datetime.fromtimestamp(metadata["file_modified_at"]),
+                            # Normalize to UTC-naive for stable ordering across environments.
+                            file_modified_at=datetime.fromtimestamp(
+                                metadata["file_modified_at"],
+                                tz=timezone.utc,
+                            ).replace(tzinfo=None),
+                            document_date=extract_result.get("document_date"),
+                            document_date_source=extract_result.get("document_date_source"),
                             archive_path=file_info.get("archive_path"),
                             hash_md5=md5,
                             hash_sha256=sha256,
@@ -871,6 +884,118 @@ def run_embeddings_batch(self, scan_id: int, request_id: Optional[str] = None):
                 "processed": processed,
                 "errors": errors,
                 "purged": purged,
+            }
+    except Exception:
+        task_status = "failed"
+        record_worker_phase(task_name, "failed", status="error")
+        raise
+    finally:
+        record_worker_task(task_name, task_status, time.perf_counter() - started_at)
+        reset_request_id(token)
+
+
+# ═══════════════════════════════════════════════════════════════
+# POST-SCAN / MAINTENANCE: Intrinsic Document Dates Backfill
+# ═══════════════════════════════════════════════════════════════
+
+@celery_app.task(bind=True, name="app.workers.tasks.enrich_document_dates")
+def enrich_document_dates(self, scan_id: int, request_id: Optional[str] = None):
+    """
+    Backfill `Document.document_date` and `Document.document_date_source` for an existing scan.
+
+    This is for forensics: it extracts intrinsic dates from the document itself (PDF metadata,
+    EXIF, email headers) rather than relying on filesystem timestamps.
+
+    Notes:
+    - Best-effort: missing/invalid files are skipped silently.
+    - Runs in batches to avoid loading millions of rows in memory.
+    """
+    task_name = "enrich_document_dates"
+    started_at = time.perf_counter()
+    task_status = "success"
+    token, bound_request_id = _init_worker_context(request_id, self.request.id)
+    record_worker_phase(task_name, "started")
+
+    try:
+        with get_db_context() as db:
+            scan = db.query(Scan).filter(Scan.id == scan_id).first()
+            if not scan:
+                task_status = "not_found"
+                record_worker_phase(task_name, "scan_not_found", status="error")
+                return {"error": f"Scan {scan_id} not found"}
+
+            eligible_types = (DocumentType.PDF, DocumentType.IMAGE, DocumentType.EMAIL)
+            base_query = (
+                db.query(Document)
+                .filter(
+                    Document.scan_id == scan_id,
+                    Document.document_date.is_(None),
+                    Document.file_type.in_(eligible_types),
+                )
+                .order_by(Document.id.asc())
+            )
+
+            total_documents = base_query.count()
+            if total_documents == 0:
+                task_status = "completed_empty"
+                record_worker_phase(task_name, "completed")
+                return {"status": "completed", "processed": 0, "updated": 0, "errors": 0}
+
+            record_worker_phase(task_name, "processing_started")
+            processed = 0
+            updated = 0
+            errors = 0
+            last_id = 0
+
+            batch_size = 500
+            while True:
+                batch = (
+                    base_query
+                    .filter(Document.id > last_id)
+                    .limit(batch_size)
+                    .all()
+                )
+                if not batch:
+                    break
+
+                for doc in batch:
+                    last_id = doc.id
+                    processed += 1
+                    try:
+                        extracted = extract_document_date(doc.file_path, doc.file_type)
+                        if extracted is None:
+                            continue
+                        dt, source = extracted
+                        doc.document_date = dt
+                        doc.document_date_source = source
+                        updated += 1
+                    except Exception as exc:
+                        errors += 1
+                        if errors <= 3:
+                            logger.error("Document date enrich error on doc %s: %s", doc.id, exc)
+
+                db.commit()
+
+                self.update_state(state="PROGRESS", meta={
+                    "phase": "document_dates",
+                    "processed": processed,
+                    "total": total_documents,
+                    "updated": updated,
+                    "errors": errors,
+                    "request_id": bound_request_id,
+                })
+
+            if errors:
+                task_status = "completed_with_errors"
+                record_worker_phase(task_name, "completed", status="error")
+            else:
+                record_worker_phase(task_name, "completed")
+
+            return {
+                "status": "completed",
+                "processed": processed,
+                "updated": updated,
+                "errors": errors,
             }
     except Exception:
         task_status = "failed"

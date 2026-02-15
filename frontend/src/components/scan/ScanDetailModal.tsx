@@ -4,12 +4,14 @@ import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
 import { 
     FileText, Image, FileCode, AlertTriangle, CheckCircle, 
-    Clock, Folder, Activity 
+    Clock, Folder, Activity, Calendar
 } from 'lucide-react'
 import { useTranslation } from '@/contexts/I18nContext'
 import { authFetch } from '@/lib/auth'
+import { toast } from 'sonner'
 
 interface ScanDetail {
     id: number
@@ -35,6 +37,7 @@ export function ScanDetailModal({ scanId, open, onClose }: ScanDetailModalProps)
     const { t } = useTranslation()
     const [scan, setScan] = useState<ScanDetail | null>(null)
     const [loading, setLoading] = useState(false)
+    const [isEnrichingDates, setIsEnrichingDates] = useState(false)
 
     useEffect(() => {
         if (!scanId || !open) return
@@ -46,6 +49,20 @@ export function ScanDetailModal({ scanId, open, onClose }: ScanDetailModalProps)
             .catch(() => setScan(null))
             .finally(() => setLoading(false))
     }, [scanId, open])
+
+    const enqueueDateEnrichment = async () => {
+        if (!scanId) return
+        setIsEnrichingDates(true)
+        try {
+            const res = await authFetch(`/api/scan/${scanId}/enrich-dates`, { method: 'POST' })
+            if (!res.ok) throw new Error('enrich_failed')
+            toast.success(t('scans.toast.enrichDatesEnqueued'))
+        } catch {
+            toast.error(t('scans.toast.enrichDatesFailed'))
+        } finally {
+            setIsEnrichingDates(false)
+        }
+    }
 
     if (!scan && !loading) return null
 
@@ -176,6 +193,28 @@ export function ScanDetailModal({ scanId, open, onClose }: ScanDetailModalProps)
                                     </div>
                                 </div>
                             )}
+
+                            {/* Date enrichment */}
+                            <div className="p-4 rounded-lg bg-muted/50 flex items-start justify-between gap-4">
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                                        <Calendar className="h-4 w-4" />
+                                        {t('scans.enrichDatesTitle')}
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        {t('scans.enrichDatesBody')}
+                                    </p>
+                                </div>
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={enqueueDateEnrichment}
+                                    disabled={isEnrichingDates || scan.status !== 'completed'}
+                                    title={scan.status !== 'completed' ? t('scans.enrichDatesRequiresCompletion') : undefined}
+                                >
+                                    {isEnrichingDates ? t('scans.enrichDatesEnqueueing') : t('scans.enrichDatesAction')}
+                                </Button>
+                            </div>
 
                             {/* Timestamps */}
                             <div className="text-xs text-muted-foreground space-y-1">

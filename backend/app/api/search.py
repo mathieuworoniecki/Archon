@@ -241,7 +241,7 @@ async def hybrid_search(
                      or query.date_from or query.date_to or query.entity_names):
         # Build a filter query
         filter_q = db.query(Document.id).filter(Document.id.in_(doc_ids))
-        source_date = func.coalesce(Document.file_modified_at, Document.indexed_at)
+        source_date = func.coalesce(Document.document_date, Document.file_modified_at, Document.indexed_at)
         
         if query.size_min is not None:
             filter_q = filter_q.filter(Document.file_size >= query.size_min)
@@ -357,7 +357,7 @@ async def get_search_facets(
             })
     
     # Date range
-    source_date = func.coalesce(Document.file_modified_at, Document.indexed_at)
+    source_date = func.coalesce(Document.document_date, Document.file_modified_at, Document.indexed_at)
     date_min = base_q.with_entities(func.min(source_date)).scalar()
     date_max = base_q.with_entities(func.max(source_date)).scalar()
     date_range = None

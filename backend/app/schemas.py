@@ -102,6 +102,8 @@ class DocumentOut(BaseModel):
     text_length: int
     has_ocr: bool
     file_modified_at: Optional[datetime]
+    document_date: Optional[datetime] = None
+    document_date_source: Optional[str] = None
     indexed_at: datetime
     archive_path: Optional[str] = None  # Path inside archive if extracted
     redaction_status: Optional[str] = None  # none, suspected, confirmed
