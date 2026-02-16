@@ -60,24 +60,27 @@ def _is_deferred_ocr_placeholder(text: Optional[str]) -> bool:
     return text.lstrip().startswith(_DEFERRED_OCR_PREFIXES)
 
 
-def _acquire_scan_run_lock(redis_client, scan_id: int, owner: str, ttl_seconds: int) -> bool:
-    """
-    Acquire a distributed lock to ensure only one worker processes a scan at once.
+def _scan_phase_lock_key(scan_id: int, phase: str) -> str:
+    return f"scan:{scan_id}:{phase}:lock"
 
-    Redis visibility timeout redelivery can otherwise spawn duplicate `run_scan`
-    workers for the same scan/task, causing status flaps and duplicate inserts.
+
+def _acquire_scan_phase_lock(redis_client, scan_id: int, phase: str, owner: str, ttl_seconds: int) -> bool:
+    """
+    Acquire a distributed lock for a given scan phase.
+
+    Prevents duplicate Celery redelivery from running the same phase concurrently.
     """
     try:
-        return bool(redis_client.set(f"scan:{scan_id}:run_lock", owner, nx=True, ex=ttl_seconds))
+        return bool(redis_client.set(_scan_phase_lock_key(scan_id, phase), owner, nx=True, ex=ttl_seconds))
     except Exception:
-        # Fail-open: do not block scan when Redis lock write fails.
+        # Fail-open: do not block work when Redis lock write fails.
         return True
 
 
-def _refresh_scan_run_lock(redis_client, scan_id: int, owner: str, ttl_seconds: int) -> None:
-    """Refresh lock expiry if we still own it."""
+def _refresh_scan_phase_lock(redis_client, scan_id: int, phase: str, owner: str, ttl_seconds: int) -> None:
+    """Refresh phase lock expiry if current worker still owns it."""
     try:
-        key = f"scan:{scan_id}:run_lock"
+        key = _scan_phase_lock_key(scan_id, phase)
         current = redis_client.get(key)
         if isinstance(current, bytes):
             current = current.decode("utf-8", errors="ignore")
@@ -87,10 +90,10 @@ def _refresh_scan_run_lock(redis_client, scan_id: int, owner: str, ttl_seconds: 
         pass
 
 
-def _release_scan_run_lock(redis_client, scan_id: int, owner: str) -> None:
-    """Release lock only when current owner matches."""
+def _release_scan_phase_lock(redis_client, scan_id: int, phase: str, owner: str) -> None:
+    """Release phase lock only when current owner matches."""
     try:
-        key = f"scan:{scan_id}:run_lock"
+        key = _scan_phase_lock_key(scan_id, phase)
         current = redis_client.get(key)
         if isinstance(current, bytes):
             current = current.decode("utf-8", errors="ignore")
@@ -98,6 +101,26 @@ def _release_scan_run_lock(redis_client, scan_id: int, owner: str) -> None:
             redis_client.delete(key)
     except Exception:
         pass
+
+
+def _acquire_scan_run_lock(redis_client, scan_id: int, owner: str, ttl_seconds: int) -> bool:
+    """
+    Acquire a distributed lock to ensure only one worker processes a scan at once.
+
+    Redis visibility timeout redelivery can otherwise spawn duplicate `run_scan`
+    workers for the same scan/task, causing status flaps and duplicate inserts.
+    """
+    return _acquire_scan_phase_lock(redis_client, scan_id, "run", owner, ttl_seconds)
+
+
+def _refresh_scan_run_lock(redis_client, scan_id: int, owner: str, ttl_seconds: int) -> None:
+    """Refresh lock expiry if we still own it."""
+    _refresh_scan_phase_lock(redis_client, scan_id, "run", owner, ttl_seconds)
+
+
+def _release_scan_run_lock(redis_client, scan_id: int, owner: str) -> None:
+    """Release lock only when current owner matches."""
+    _release_scan_phase_lock(redis_client, scan_id, "run", owner)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -700,6 +723,11 @@ def run_ner_batch(self, scan_id: int, request_id: Optional[str] = None):
     task_status = "success"
     token, bound_request_id = _init_worker_context(request_id, self.request.id)
     record_worker_phase(task_name, "started")
+    redis_client = None
+    lock_owner = f"{self.request.id or 'unknown'}:{os.getpid()}"
+    lock_ttl_seconds = max(int(getattr(settings, "celery_visibility_timeout_seconds", 172800)) + 3600, 7200)
+    has_phase_lock = False
+    lock_phase = "ner_batch"
 
     try:
         with get_db_context() as db:
@@ -708,6 +736,32 @@ def run_ner_batch(self, scan_id: int, request_id: Optional[str] = None):
                 task_status = "not_found"
                 record_worker_phase(task_name, "scan_not_found", status="error")
                 return {"error": f"Scan {scan_id} not found"}
+
+            # Prevent duplicate redelivered workers from running NER concurrently.
+            try:
+                import redis
+                redis_client = redis.Redis.from_url(settings.redis_url)
+            except Exception as redis_exc:
+                redis_client = None
+                logger.warning(
+                    "NER scan %s: Redis unavailable (%s), proceeding without distributed lock",
+                    scan_id,
+                    redis_exc,
+                )
+
+            if redis_client is not None:
+                has_phase_lock = _acquire_scan_phase_lock(
+                    redis_client, scan_id, lock_phase, lock_owner, lock_ttl_seconds
+                )
+                if not has_phase_lock:
+                    task_status = "duplicate_skipped"
+                    record_worker_phase(task_name, "duplicate_skipped")
+                    logger.warning(
+                        "Duplicate run_ner_batch execution detected for scan %s (task %s); skipping",
+                        scan_id,
+                        self.request.id,
+                    )
+                    return {"status": "duplicate_skipped", "scan_id": scan_id}
 
             # Cursor-style iteration to avoid loading all rows in memory.
             placeholder_filter = or_(
@@ -777,6 +831,8 @@ def run_ner_batch(self, scan_id: int, request_id: Optional[str] = None):
                 # Commit per batch
                 db.commit()
                 last_id = batch[-1].id
+                if has_phase_lock and redis_client is not None:
+                    _refresh_scan_phase_lock(redis_client, scan_id, lock_phase, lock_owner, lock_ttl_seconds)
 
                 self.update_state(state="PROGRESS", meta={
                     "phase": "ner",
@@ -801,6 +857,8 @@ def run_ner_batch(self, scan_id: int, request_id: Optional[str] = None):
         record_worker_phase(task_name, "failed", status="error")
         raise
     finally:
+        if has_phase_lock and redis_client is not None:
+            _release_scan_phase_lock(redis_client, scan_id, lock_phase, lock_owner)
         record_worker_task(task_name, task_status, time.perf_counter() - started_at)
         reset_request_id(token)
 
@@ -820,6 +878,11 @@ def run_embeddings_batch(self, scan_id: int, request_id: Optional[str] = None):
     task_status = "success"
     token, bound_request_id = _init_worker_context(request_id, self.request.id)
     record_worker_phase(task_name, "started")
+    redis_client = None
+    lock_owner = f"{self.request.id or 'unknown'}:{os.getpid()}"
+    lock_ttl_seconds = max(int(getattr(settings, "celery_visibility_timeout_seconds", 172800)) + 3600, 7200)
+    has_phase_lock = False
+    lock_phase = "embeddings_batch"
 
     try:
         if not settings.gemini_api_key:
@@ -833,6 +896,32 @@ def run_embeddings_batch(self, scan_id: int, request_id: Optional[str] = None):
                 task_status = "not_found"
                 record_worker_phase(task_name, "scan_not_found", status="error")
                 return {"error": f"Scan {scan_id} not found"}
+
+            # Prevent duplicate redelivered workers from running embeddings concurrently.
+            try:
+                import redis
+                redis_client = redis.Redis.from_url(settings.redis_url)
+            except Exception as redis_exc:
+                redis_client = None
+                logger.warning(
+                    "Embeddings scan %s: Redis unavailable (%s), proceeding without distributed lock",
+                    scan_id,
+                    redis_exc,
+                )
+
+            if redis_client is not None:
+                has_phase_lock = _acquire_scan_phase_lock(
+                    redis_client, scan_id, lock_phase, lock_owner, lock_ttl_seconds
+                )
+                if not has_phase_lock:
+                    task_status = "duplicate_skipped"
+                    record_worker_phase(task_name, "duplicate_skipped")
+                    logger.warning(
+                        "Duplicate run_embeddings_batch execution detected for scan %s (task %s); skipping",
+                        scan_id,
+                        self.request.id,
+                    )
+                    return {"status": "duplicate_skipped", "scan_id": scan_id}
 
             placeholder_filter = or_(
                 Document.text_content.like("[VIDEO] OCR%"),
@@ -874,6 +963,8 @@ def run_embeddings_batch(self, scan_id: int, request_id: Optional[str] = None):
 
                 db.commit()
                 purge_last_id = purge_batch[-1].id
+                if has_phase_lock and redis_client is not None:
+                    _refresh_scan_phase_lock(redis_client, scan_id, lock_phase, lock_owner, lock_ttl_seconds)
 
             # Cursor-style iteration to avoid loading all rows in memory.
             base_query = (
@@ -935,6 +1026,8 @@ def run_embeddings_batch(self, scan_id: int, request_id: Optional[str] = None):
 
                 db.commit()
                 last_id = batch[-1].id
+                if has_phase_lock and redis_client is not None:
+                    _refresh_scan_phase_lock(redis_client, scan_id, lock_phase, lock_owner, lock_ttl_seconds)
 
                 self.update_state(state="PROGRESS", meta={
                     "phase": "embeddings",
@@ -960,6 +1053,8 @@ def run_embeddings_batch(self, scan_id: int, request_id: Optional[str] = None):
         record_worker_phase(task_name, "failed", status="error")
         raise
     finally:
+        if has_phase_lock and redis_client is not None:
+            _release_scan_phase_lock(redis_client, scan_id, lock_phase, lock_owner)
         record_worker_task(task_name, task_status, time.perf_counter() - started_at)
         reset_request_id(token)
 
@@ -985,6 +1080,11 @@ def enrich_document_dates(self, scan_id: int, request_id: Optional[str] = None):
     task_status = "success"
     token, bound_request_id = _init_worker_context(request_id, self.request.id)
     record_worker_phase(task_name, "started")
+    redis_client = None
+    lock_owner = f"{self.request.id or 'unknown'}:{os.getpid()}"
+    lock_ttl_seconds = max(int(getattr(settings, "celery_visibility_timeout_seconds", 172800)) + 3600, 7200)
+    has_phase_lock = False
+    lock_phase = "enrich_dates"
 
     try:
         with get_db_context() as db:
@@ -993,6 +1093,32 @@ def enrich_document_dates(self, scan_id: int, request_id: Optional[str] = None):
                 task_status = "not_found"
                 record_worker_phase(task_name, "scan_not_found", status="error")
                 return {"error": f"Scan {scan_id} not found"}
+
+            # Prevent duplicate redelivered workers from running date enrichment concurrently.
+            try:
+                import redis
+                redis_client = redis.Redis.from_url(settings.redis_url)
+            except Exception as redis_exc:
+                redis_client = None
+                logger.warning(
+                    "Enrich dates scan %s: Redis unavailable (%s), proceeding without distributed lock",
+                    scan_id,
+                    redis_exc,
+                )
+
+            if redis_client is not None:
+                has_phase_lock = _acquire_scan_phase_lock(
+                    redis_client, scan_id, lock_phase, lock_owner, lock_ttl_seconds
+                )
+                if not has_phase_lock:
+                    task_status = "duplicate_skipped"
+                    record_worker_phase(task_name, "duplicate_skipped")
+                    logger.warning(
+                        "Duplicate enrich_document_dates execution detected for scan %s (task %s); skipping",
+                        scan_id,
+                        self.request.id,
+                    )
+                    return {"status": "duplicate_skipped", "scan_id": scan_id}
 
             eligible_types = (DocumentType.PDF, DocumentType.IMAGE, DocumentType.EMAIL)
             base_query = (
@@ -1045,6 +1171,8 @@ def enrich_document_dates(self, scan_id: int, request_id: Optional[str] = None):
                             logger.error("Document date enrich error on doc %s: %s", doc.id, exc)
 
                 db.commit()
+                if has_phase_lock and redis_client is not None:
+                    _refresh_scan_phase_lock(redis_client, scan_id, lock_phase, lock_owner, lock_ttl_seconds)
 
                 self.update_state(state="PROGRESS", meta={
                     "phase": "document_dates",
@@ -1072,6 +1200,8 @@ def enrich_document_dates(self, scan_id: int, request_id: Optional[str] = None):
         record_worker_phase(task_name, "failed", status="error")
         raise
     finally:
+        if has_phase_lock and redis_client is not None:
+            _release_scan_phase_lock(redis_client, scan_id, lock_phase, lock_owner)
         record_worker_task(task_name, task_status, time.perf_counter() - started_at)
         reset_request_id(token)
 
