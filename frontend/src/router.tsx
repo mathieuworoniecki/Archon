@@ -1,4 +1,4 @@
-import { createBrowserRouter, RouterProvider, Outlet, Link, useLocation, useNavigate, Navigate } from 'react-router-dom'
+import { createBrowserRouter, RouterProvider, Outlet, Link, useLocation, useNavigate, Navigate, useRouteError, isRouteErrorResponse } from 'react-router-dom'
 import { Shield, Github, Activity, FileText, Search, Star, Scan, Sparkles, Calendar, Sun, Moon, LogOut, FolderOpen, Users, Network, ScrollText, BellRing, CheckSquare, MoreHorizontal, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -7,6 +7,7 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { useTheme } from '@/hooks/useTheme'
 import { useTranslation } from '@/contexts/I18nContext'
 import { useMemo, useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
+import type { ComponentType } from 'react'
 import { isAuthenticated, clearAuth, getUser } from '@/lib/auth'
 import { useProject, ProjectProvider } from '@/contexts/ProjectContext'
 import { toast } from 'sonner'
@@ -16,18 +17,68 @@ import { OnboardingDialog, isOnboardingDismissed } from '@/components/Onboarding
 import { checkHealth, type HealthStatus } from '@/lib/api'
 import { ENABLE_COLLAB_FEATURES } from '@/lib/featureFlags'
 
-const HomePage = lazy(() => import('@/pages/documents/HomePage').then((m) => ({ default: m.HomePage })))
-const FavoritesPage = lazy(() => import('@/pages/documents/FavoritesPage').then((m) => ({ default: m.FavoritesPage })))
-const ScansPage = lazy(() => import('@/pages/ops/ScansPage').then((m) => ({ default: m.ScansPage })))
-const ChatPage = lazy(() => import('@/pages/chat/ChatPage').then((m) => ({ default: m.ChatPage })))
-const TimelinePage = lazy(() => import('@/pages/insights/TimelinePage').then((m) => ({ default: m.TimelinePage })))
-const LoginPage = lazy(() => import('@/pages/auth/LoginPage').then((m) => ({ default: m.LoginPage })))
-const ProjectDashboard = lazy(() => import('@/pages/projects/ProjectDashboard').then((m) => ({ default: m.ProjectDashboard })))
-const EntitiesPage = lazy(() => import('@/pages/insights/EntitiesPage').then((m) => ({ default: m.EntitiesPage })))
-const GraphPage = lazy(() => import('@/pages/insights/GraphPage').then((m) => ({ default: m.GraphPage })))
-const AuditPage = lazy(() => import('@/pages/insights/AuditPage').then((m) => ({ default: m.AuditPage })))
-const WatchlistPage = lazy(() => import('@/pages/ops/WatchlistPage').then((m) => ({ default: m.WatchlistPage })))
-const TasksPage = lazy(() => import('@/pages/ops/TasksPage').then((m) => ({ default: m.TasksPage })))
+const CHUNK_RELOAD_STORAGE_KEY = 'archon:chunk-reload:once'
+
+function isDynamicImportFetchError(error: unknown): boolean {
+    const msg = error instanceof Error ? error.message : String(error ?? '')
+    const normalized = msg.toLowerCase()
+    return (
+        normalized.includes('failed to fetch dynamically imported module') ||
+        normalized.includes('importing a module script failed') ||
+        normalized.includes('chunkloaderror') ||
+        normalized.includes('loading chunk')
+    )
+}
+
+function lazyNamed<T extends ComponentType<any>>(
+    importer: () => Promise<Record<string, unknown>>,
+    exportName: string,
+    routeKey: string,
+) {
+    return lazy(async () => {
+        try {
+            const mod = await importer()
+            const component = mod[exportName]
+            if (!component) {
+                throw new Error(`Missing export "${exportName}" for route "${routeKey}"`)
+            }
+            try {
+                sessionStorage.removeItem(CHUNK_RELOAD_STORAGE_KEY)
+            } catch {
+                // ignore storage errors
+            }
+            return { default: component as T }
+        } catch (error) {
+            if (typeof window !== 'undefined' && isDynamicImportFetchError(error)) {
+                try {
+                    const reloadedKey = sessionStorage.getItem(CHUNK_RELOAD_STORAGE_KEY)
+                    if (reloadedKey !== routeKey) {
+                        sessionStorage.setItem(CHUNK_RELOAD_STORAGE_KEY, routeKey)
+                        window.location.reload()
+                        return new Promise<never>(() => { /* wait for reload */ })
+                    }
+                } catch {
+                    window.location.reload()
+                    return new Promise<never>(() => { /* wait for reload */ })
+                }
+            }
+            throw error
+        }
+    })
+}
+
+const HomePage = lazyNamed(() => import('@/pages/documents/HomePage'), 'HomePage', 'home')
+const FavoritesPage = lazyNamed(() => import('@/pages/documents/FavoritesPage'), 'FavoritesPage', 'favorites')
+const ScansPage = lazyNamed(() => import('@/pages/ops/ScansPage'), 'ScansPage', 'scans')
+const ChatPage = lazyNamed(() => import('@/pages/chat/ChatPage'), 'ChatPage', 'chat')
+const TimelinePage = lazyNamed(() => import('@/pages/insights/TimelinePage'), 'TimelinePage', 'timeline')
+const LoginPage = lazyNamed(() => import('@/pages/auth/LoginPage'), 'LoginPage', 'login')
+const ProjectDashboard = lazyNamed(() => import('@/pages/projects/ProjectDashboard'), 'ProjectDashboard', 'projects')
+const EntitiesPage = lazyNamed(() => import('@/pages/insights/EntitiesPage'), 'EntitiesPage', 'entities')
+const GraphPage = lazyNamed(() => import('@/pages/insights/GraphPage'), 'GraphPage', 'graph')
+const AuditPage = lazyNamed(() => import('@/pages/insights/AuditPage'), 'AuditPage', 'audit')
+const WatchlistPage = lazyNamed(() => import('@/pages/ops/WatchlistPage'), 'WatchlistPage', 'watchlist')
+const TasksPage = lazyNamed(() => import('@/pages/ops/TasksPage'), 'TasksPage', 'tasks')
 
 function RouteLoadingFallback() {
     return (
@@ -39,6 +90,45 @@ function RouteLoadingFallback() {
 
 function withRouteSuspense(element: JSX.Element): JSX.Element {
     return <Suspense fallback={<RouteLoadingFallback />}>{element}</Suspense>
+}
+
+function RouteErrorElement() {
+    const error = useRouteError()
+    const navigate = useNavigate()
+
+    const message = isRouteErrorResponse(error)
+        ? `${error.status} ${error.statusText}`
+        : error instanceof Error
+            ? error.message
+            : String(error ?? 'Unknown error')
+
+    const isChunkError = isDynamicImportFetchError(error)
+
+    return (
+        <div className="h-full min-h-[60vh] flex items-center justify-center px-6">
+            <div className="max-w-xl w-full rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(22,27,34,0.75)] p-6">
+                <h2 className="text-xl font-semibold mb-2">
+                    {isChunkError ? 'Nouvelle version détectée' : 'Erreur inattendue'}
+                </h2>
+                <p className="text-sm text-muted-foreground mb-4">
+                    {isChunkError
+                        ? 'Le navigateur a gardé un ancien chunk. Recharge la page pour récupérer la dernière version.'
+                        : 'Une erreur est survenue dans cette vue.'}
+                </p>
+                <div className="rounded-lg border border-[rgba(255,255,255,0.08)] bg-background/50 p-3 text-xs font-mono text-muted-foreground break-all mb-4">
+                    {message}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                    <Button onClick={() => window.location.reload()}>
+                        Recharger
+                    </Button>
+                    <Button variant="outline" onClick={() => navigate('/projects')}>
+                        Aller aux projets
+                    </Button>
+                </div>
+            </div>
+        </div>
+    )
 }
 
 // Protected route wrapper
@@ -536,14 +626,17 @@ export const router = createBrowserRouter([
     {
         path: '/login',
         element: withRouteSuspense(<LoginPage />),
+        errorElement: <RouteErrorElement />,
     },
     {
         path: '/projects',
         element: withRouteSuspense(<ProtectedRoute><ProjectDashboard /></ProtectedRoute>),
+        errorElement: <RouteErrorElement />,
     },
     {
         path: '/',
         element: withRouteSuspense(<ProtectedRoute><ProjectGuard><RootLayout /></ProjectGuard></ProtectedRoute>),
+        errorElement: <RouteErrorElement />,
         children: [
             {
                 index: true,
