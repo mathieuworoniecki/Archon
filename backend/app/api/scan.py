@@ -15,7 +15,7 @@ from sqlalchemy import text
 from celery.result import AsyncResult
 
 from ..database import get_db
-from ..models import Scan, ScanStatus, User
+from ..models import Scan, ScanError, ScanStatus, User
 from ..schemas import ScanCreate, ScanOut, ScanProgress
 from ..workers.celery_app import celery_app
 from ..workers.tasks import run_scan, enrich_document_dates
@@ -791,6 +791,27 @@ async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db), curr
                                 progress_data["type_counts"] = info.get("type_counts")
                                 progress_data["skipped_details"] = info.get("skipped_details", [])
                                 progress_data["recent_errors"] = info.get("recent_errors", [])
+                        except Exception:
+                            pass
+
+                    # Fallback: if live worker meta has no error payload, read latest persisted errors.
+                    if progress_data["failed_files"] > 0 and not progress_data["recent_errors"]:
+                        try:
+                            latest_errors = (
+                                session.query(ScanError)
+                                .filter(ScanError.scan_id == scan_id)
+                                .order_by(ScanError.created_at.desc())
+                                .limit(10)
+                                .all()
+                            )
+                            progress_data["recent_errors"] = [
+                                {
+                                    "file": Path(err.file_path).name,
+                                    "type": err.error_type,
+                                    "message": (err.error_message or "")[:200],
+                                }
+                                for err in latest_errors
+                            ]
                         except Exception:
                             pass
                     

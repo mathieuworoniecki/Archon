@@ -91,6 +91,19 @@ export function ProjectDashboard() {
     const isFailed = progress?.status === 'failed'
     const isCancelled = progress?.status === 'cancelled'
     const isTerminal = isComplete || isFailed || isCancelled
+    const hasScanErrors = (progress?.failed_files || 0) > 0
+    const progressFillClass = isComplete
+        ? 'from-emerald-500 via-lime-400 to-cyan-400'
+        : isFailed
+            ? 'from-rose-600 via-red-500 to-orange-500'
+            : isCancelled
+                ? 'from-orange-500 via-amber-500 to-yellow-400'
+                : 'from-amber-400 via-yellow-300 to-cyan-400'
+    const progressTrackClass = isFailed
+        ? 'bg-red-950/40'
+        : isCancelled
+            ? 'bg-orange-950/35'
+            : 'bg-muted'
     const toastKeyRef = useRef<string | null>(null)
 
     // Toast on scan completion
@@ -526,14 +539,14 @@ export function ProjectDashboard() {
 
                             {/* Progress Bar */}
                             {progress.phase === 'detection' ? (
-                                <div className="relative h-3 mb-5 bg-muted rounded-full overflow-hidden">
-                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-primary/60 to-transparent rounded-full"
+                                <div className={`relative h-3 mb-5 rounded-full overflow-hidden ${progressTrackClass}`}>
+                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-amber-300/60 to-transparent rounded-full"
                                          style={{ animation: 'shimmer 1.5s ease-in-out infinite' }} />
                                 </div>
                             ) : (
-                                <div className="relative h-3 mb-5 bg-muted rounded-full overflow-hidden">
+                                <div className={`relative h-3 mb-5 rounded-full overflow-hidden ${progressTrackClass}`}>
                                     <div
-                                        className="h-full bg-gradient-to-r from-primary to-blue-500 rounded-full transition-all duration-700 ease-out"
+                                        className={`h-full bg-gradient-to-r ${progressFillClass} rounded-full transition-all duration-700 ease-out`}
                                         style={{ width: `${Math.min(progress.progress_percent, 100)}%` }}
                                     />
                                     {!isComplete && (
@@ -546,9 +559,13 @@ export function ProjectDashboard() {
                             {/* 6-Metric Grid */}
                             <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-5">
                                 <div className="text-center p-3 rounded-lg bg-[rgba(22,27,34,0.6)] border border-[rgba(255,255,255,0.06)]">
-                                    <div className="text-2xl font-bold text-primary tabular-nums">
-                                        {formatNumber(progress.processed_files)}
-                                        <span className="text-base text-muted-foreground font-normal">/{formatNumber(progress.total_files)}</span>
+                                    <div className="min-w-0 space-y-0.5">
+                                        <div className="text-2xl font-bold text-primary tabular-nums leading-none truncate">
+                                            {formatNumber(progress.processed_files)}
+                                        </div>
+                                        <div className="text-[12px] text-muted-foreground font-mono truncate">
+                                            / {formatNumber(progress.total_files)}
+                                        </div>
                                     </div>
                                     <div className="text-[11px] text-muted-foreground uppercase tracking-wide mt-0.5">{t('scans.processed')}</div>
                                 </div>
@@ -583,6 +600,32 @@ export function ProjectDashboard() {
                                     <div className="text-[11px] text-muted-foreground uppercase tracking-wide mt-0.5">{t('scans.elapsed')}</div>
                                 </div>
                             </div>
+
+                            {hasScanErrors && (
+                                <div className="mb-4 rounded-lg border border-red-500/25 bg-red-500/8 p-3">
+                                    <div className="flex items-center gap-2 text-sm font-medium text-red-300 mb-2">
+                                        <AlertTriangle className="h-4 w-4" />
+                                        {t('scans.recentErrors')} ({progress.recent_errors?.length || 0}/{progress.failed_files || 0})
+                                    </div>
+                                    {progress.recent_errors && progress.recent_errors.length > 0 ? (
+                                        <div className="space-y-1.5">
+                                            {progress.recent_errors.slice(0, 3).map((err, i) => (
+                                                <div key={`top-err-${i}`} className="flex items-start gap-2 text-xs py-1.5 px-2 rounded bg-red-500/5 border border-red-500/15">
+                                                    <XCircle className="h-3.5 w-3.5 text-red-400 mt-0.5 shrink-0" />
+                                                    <div className="min-w-0">
+                                                        <span className="font-mono text-foreground truncate block">{err.file}</span>
+                                                        <span className="text-red-300/80 text-[11px]">[{err.type}] {err.message}</span>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <p className="text-xs text-red-200/80">
+                                            Erreurs détectées, détails en cours de remontée…
+                                        </p>
+                                    )}
+                                </div>
+                            )}
 
                             {/* Type Breakdown Bar + Activity Feed */}
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -667,7 +710,7 @@ export function ProjectDashboard() {
                             </div>
 
                             {/* Diagnostics Accordion */}
-                            {(progress.skipped_details?.length > 0 || progress.recent_errors?.length > 0) && (
+                            {(progress.skipped_details?.length > 0 || hasScanErrors) && (
                                 <details className="mt-4 rounded-lg border border-[rgba(255,255,255,0.08)] bg-[rgba(22,27,34,0.6)] overflow-hidden group">
                                     <summary className="flex items-center justify-between cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors select-none">
                                         <div className="flex items-center gap-2">
