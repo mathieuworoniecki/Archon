@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     
     # Redis
     redis_url: str = "redis://localhost:6379/0"
+    celery_visibility_timeout_seconds: int = 172800  # 48h for very long scans
     
     # Meilisearch
     meilisearch_url: str = "http://localhost:7700"

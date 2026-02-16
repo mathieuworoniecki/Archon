@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ScanProgress, connectScanStream } from '@/lib/api'
+import { ScanProgress, connectScanStream, getScanProgress } from '@/lib/api'
 
 export function useScanProgress(scanId: number | null) {
     const [progress, setProgress] = useState<ScanProgress | null>(null)
@@ -7,6 +7,7 @@ export function useScanProgress(scanId: number | null) {
     const [isFinished, setIsFinished] = useState(false)
     const [isReconnecting, setIsReconnecting] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [streamRevision, setStreamRevision] = useState(0)
     const connectionRef = useRef<{ close: () => void } | null>(null)
 
     useEffect(() => {
@@ -44,7 +45,34 @@ export function useScanProgress(scanId: number | null) {
         return () => {
             connection.close()
         }
-    }, [scanId])
+    }, [scanId, streamRevision])
+
+    useEffect(() => {
+        if (!scanId || !isFinished || !progress) return
+        if (progress.status !== 'failed' && progress.status !== 'cancelled') return
+
+        let cancelled = false
+        const timer = setTimeout(async () => {
+            try {
+                const latest = await getScanProgress(scanId)
+                if (cancelled) return
+                if (latest.status === 'running') {
+                    setProgress(latest)
+                    setIsFinished(false)
+                    setError(null)
+                    setIsReconnecting(true)
+                    setStreamRevision((v) => v + 1)
+                }
+            } catch {
+                // Keep current terminal state if verification fails.
+            }
+        }, 1200)
+
+        return () => {
+            cancelled = true
+            clearTimeout(timer)
+        }
+    }, [scanId, isFinished, progress])
 
     const disconnect = useCallback(() => {
         connectionRef.current?.close()

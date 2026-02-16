@@ -33,6 +33,14 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     result_expires=86400,
+    broker_transport_options={
+        # Prevent Redis redelivery of long-running scan tasks.
+        # Must be > longest expected scan duration.
+        "visibility_timeout": settings.celery_visibility_timeout_seconds,
+    },
+    result_backend_transport_options={
+        "visibility_timeout": settings.celery_visibility_timeout_seconds,
+    },
 )
 
 # Priority queue definitions
@@ -49,5 +57,5 @@ celery_app.conf.task_routes = {
     "app.workers.tasks.process_document": {"queue": "documents"},
     "app.workers.tasks.run_ner_batch": {"queue": "documents"},
     "app.workers.tasks.run_embeddings_batch": {"queue": "documents"},
+    "app.workers.tasks.enrich_document_dates": {"queue": "documents"},
 }
-

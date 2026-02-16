@@ -28,6 +28,8 @@ from ..telemetry.request_context import get_request_id
 router = APIRouter(prefix="/scan", tags=["scan"])
 _scan_path_locks: dict[str, threading.Lock] = {}
 _scan_path_locks_guard = threading.Lock()
+_scan_progress_floors: dict[int, dict[str, int]] = {}
+_scan_progress_floors_guard = threading.Lock()
 
 
 def _raise_path_http_error(exc: Exception) -> None:
@@ -72,6 +74,91 @@ def _acquire_local_scan_path_lock(normalized_path: str) -> threading.Lock:
             _scan_path_locks[normalized_path] = lock
     lock.acquire()
     return lock
+
+
+def _is_task_active(task_id: Optional[str]) -> bool:
+    """
+    Best-effort check: is a Celery task currently active/reserved/scheduled.
+
+    This is critical for long scans: with Redis visibility timeout redelivery,
+    DB status may transiently flip to FAILED while the task is still running.
+    """
+    if not task_id:
+        return False
+
+    try:
+        inspector = celery_app.control.inspect(timeout=1.0)
+        active = inspector.active() or {}
+        reserved = inspector.reserved() or {}
+        scheduled = inspector.scheduled() or {}
+        for bucket in (active, reserved, scheduled):
+            for tasks in bucket.values():
+                for task in tasks or []:
+                    if isinstance(task, dict) and task.get("id") == task_id:
+                        return True
+    except Exception:
+        pass
+
+    try:
+        state = (AsyncResult(task_id, app=celery_app).state or "").upper()
+        if state in {"PENDING", "STARTED", "PROGRESS", "RETRY"}:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _reconcile_scan_runtime_status(scan: Scan) -> bool:
+    """
+    Reconcile DB status with live Celery runtime state.
+
+    Returns True when a mutation was applied.
+    """
+    if scan.status in {ScanStatus.FAILED, ScanStatus.CANCELLED} and _is_task_active(scan.celery_task_id):
+        scan.status = ScanStatus.RUNNING
+        scan.completed_at = None
+        # Keep UI stable: clear transient failure text once runtime confirms activity.
+        scan.error_message = None
+        return True
+    return False
+
+
+def _apply_progress_floor(scan_id: int, total_files: int, processed_files: int, failed_files: int) -> tuple[int, int, int]:
+    """
+    Keep scan progress monotonic per API process.
+
+    Duplicate Celery redeliveries can commit lower processed counters after
+    higher ones, causing the UI progress to jump backwards. We clamp to the max
+    seen values for this scan within the current backend process.
+    """
+    with _scan_progress_floors_guard:
+        floor = _scan_progress_floors.get(scan_id)
+        if floor is None:
+            floor = {
+                "total_files": max(total_files, 0),
+                "processed_files": max(processed_files, 0),
+                "failed_files": max(failed_files, 0),
+            }
+            _scan_progress_floors[scan_id] = floor
+        else:
+            floor["total_files"] = max(floor["total_files"], max(total_files, 0))
+            floor["processed_files"] = max(floor["processed_files"], max(processed_files, 0))
+            floor["failed_files"] = max(floor["failed_files"], max(failed_files, 0))
+
+        effective_total = floor["total_files"]
+        effective_processed = floor["processed_files"]
+        effective_failed = floor["failed_files"]
+
+    # Never expose impossible values to the UI.
+    if effective_total > 0:
+        effective_processed = min(effective_processed, effective_total)
+        effective_failed = min(effective_failed, effective_processed)
+    else:
+        effective_processed = max(effective_processed, 0)
+        effective_failed = max(effective_failed, 0)
+
+    return effective_total, effective_processed, effective_failed
 
 
 @contextmanager
@@ -548,6 +635,11 @@ def list_scans(
         query = query.filter(Scan.status == status)
     
     scans = query.order_by(Scan.created_at.desc()).offset(skip).limit(limit).all()
+    mutated = False
+    for scan in scans:
+        mutated = _reconcile_scan_runtime_status(scan) or mutated
+    if mutated:
+        db.commit()
     return scans
 
 
@@ -557,6 +649,9 @@ def get_scan(scan_id: int, db: Session = Depends(get_db), current_user: User = D
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
+    if _reconcile_scan_runtime_status(scan):
+        db.commit()
+        db.refresh(scan)
     return scan
 
 
@@ -566,13 +661,23 @@ def get_scan_progress(scan_id: int, db: Session = Depends(get_db), current_user:
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
+    if _reconcile_scan_runtime_status(scan):
+        db.commit()
+        db.refresh(scan)
     
+    effective_total, effective_processed, effective_failed = _apply_progress_floor(
+        scan_id,
+        scan.total_files,
+        scan.processed_files,
+        scan.failed_files,
+    )
+
     progress_data = {
         "scan_id": scan_id,
         "status": scan.status,
-        "total_files": scan.total_files,
-        "processed_files": scan.processed_files,
-        "failed_files": scan.failed_files,
+        "total_files": effective_total,
+        "processed_files": effective_processed,
+        "failed_files": effective_failed,
         "current_file": None,
         "progress_percent": 0.0
     }
@@ -585,8 +690,8 @@ def get_scan_progress(scan_id: int, db: Session = Depends(get_db), current_user:
             progress_data["progress_percent"] = result.info.get("progress", 0.0)
     
     # Calculate progress percent from DB if not from Celery
-    if progress_data["progress_percent"] == 0 and scan.total_files > 0:
-        progress_data["progress_percent"] = (scan.processed_files / scan.total_files) * 100
+    if progress_data["progress_percent"] == 0 and progress_data["total_files"] > 0:
+        progress_data["progress_percent"] = (progress_data["processed_files"] / progress_data["total_files"]) * 100
     
     return ScanProgress(**progress_data)
 
@@ -622,6 +727,10 @@ async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db), curr
                     if not scan:
                         yield f"event: error\ndata: {json.dumps({'error': 'Scan not found'})}\n\n"
                         break
+
+                    if _reconcile_scan_runtime_status(scan):
+                        session.commit()
+                        session.refresh(scan)
                     
                     # Base progress data
                     now = time.time()
@@ -656,6 +765,16 @@ async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db), curr
                         "skipped_details": [],
                         "recent_errors": []
                     }
+
+                    effective_total, effective_processed, effective_failed = _apply_progress_floor(
+                        scan_id,
+                        scan.total_files,
+                        scan.processed_files,
+                        scan.failed_files,
+                    )
+                    progress_data["total_files"] = effective_total
+                    progress_data["processed_files"] = effective_processed
+                    progress_data["failed_files"] = effective_failed
                     
                     # Get Celery task state if running
                     if scan.celery_task_id and scan.status == ScanStatus.RUNNING:
@@ -676,8 +795,10 @@ async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db), curr
                             pass
                     
                     # Calculate progress percent from DB if not from Celery
-                    if progress_data["progress_percent"] == 0 and scan.total_files > 0:
-                        progress_data["progress_percent"] = (scan.processed_files / scan.total_files) * 100
+                    if progress_data["progress_percent"] == 0 and progress_data["total_files"] > 0:
+                        progress_data["progress_percent"] = (
+                            progress_data["processed_files"] / progress_data["total_files"]
+                        ) * 100
                     
                     # Determine phase from status if not set by Celery
                     if progress_data["phase"] == "idle":
@@ -690,7 +811,7 @@ async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db), curr
                             progress_data["phase"] = "complete"
                     
                     # Compute speed — true average from elapsed time
-                    current_processed = scan.processed_files
+                    current_processed = progress_data["processed_files"]
                     
                     # True average speed = total processed / total time
                     avg_speed = 0.0
@@ -699,7 +820,7 @@ async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db), curr
                         progress_data["files_per_second"] = round(avg_speed, 1)
                     
                     # ETA from true average speed (consistent with displayed speed)
-                    remaining = scan.total_files - current_processed
+                    remaining = progress_data["total_files"] - current_processed
                     if avg_speed > 0 and remaining > 0:
                         progress_data["eta_seconds"] = int(remaining / avg_speed)
                     
@@ -708,6 +829,9 @@ async def stream_scan_progress(scan_id: int, db: Session = Depends(get_db), curr
                     
                     # Stop streaming if scan is done
                     if scan.status in [ScanStatus.COMPLETED, ScanStatus.FAILED, ScanStatus.CANCELLED]:
+                        # Guard: do not close SSE if Celery still reports this task as active.
+                        if _is_task_active(scan.celery_task_id):
+                            continue
                         # Ensure UI stepper reaches a terminal state even on failure/cancel.
                         progress_data["phase"] = "complete"
                         yield f"event: complete\ndata: {json.dumps(progress_data)}\n\n"
@@ -818,6 +942,11 @@ def resume_scan(scan_id: int, db: Session = Depends(get_db), current_user: User 
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
+
+    if _reconcile_scan_runtime_status(scan):
+        db.commit()
+        db.refresh(scan)
+        return scan
 
     # Re-validate persisted path before resuming any background task.
     try:

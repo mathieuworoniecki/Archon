@@ -60,6 +60,46 @@ def _is_deferred_ocr_placeholder(text: Optional[str]) -> bool:
     return text.lstrip().startswith(_DEFERRED_OCR_PREFIXES)
 
 
+def _acquire_scan_run_lock(redis_client, scan_id: int, owner: str, ttl_seconds: int) -> bool:
+    """
+    Acquire a distributed lock to ensure only one worker processes a scan at once.
+
+    Redis visibility timeout redelivery can otherwise spawn duplicate `run_scan`
+    workers for the same scan/task, causing status flaps and duplicate inserts.
+    """
+    try:
+        return bool(redis_client.set(f"scan:{scan_id}:run_lock", owner, nx=True, ex=ttl_seconds))
+    except Exception:
+        # Fail-open: do not block scan when Redis lock write fails.
+        return True
+
+
+def _refresh_scan_run_lock(redis_client, scan_id: int, owner: str, ttl_seconds: int) -> None:
+    """Refresh lock expiry if we still own it."""
+    try:
+        key = f"scan:{scan_id}:run_lock"
+        current = redis_client.get(key)
+        if isinstance(current, bytes):
+            current = current.decode("utf-8", errors="ignore")
+        if current == owner:
+            redis_client.expire(key, ttl_seconds)
+    except Exception:
+        pass
+
+
+def _release_scan_run_lock(redis_client, scan_id: int, owner: str) -> None:
+    """Release lock only when current owner matches."""
+    try:
+        key = f"scan:{scan_id}:run_lock"
+        current = redis_client.get(key)
+        if isinstance(current, bytes):
+            current = current.decode("utf-8", errors="ignore")
+        if current == owner:
+            redis_client.delete(key)
+    except Exception:
+        pass
+
+
 # ═══════════════════════════════════════════════════════════════
 # HELPERS
 # ═══════════════════════════════════════════════════════════════
@@ -224,6 +264,10 @@ def run_scan(
     task_status = "success"
     token, bound_request_id = _init_worker_context(request_id, self.request.id)
     record_worker_phase(task_name, "started")
+    redis_client = None
+    lock_owner = f"{self.request.id or 'unknown'}:{os.getpid()}"
+    lock_ttl_seconds = max(int(getattr(settings, "celery_visibility_timeout_seconds", 172800)) + 3600, 7200)
+    has_scan_lock = False
 
     try:
         with get_db_context() as db:
@@ -232,6 +276,26 @@ def run_scan(
                 task_status = "not_found"
                 record_worker_phase(task_name, "scan_not_found", status="error")
                 return {"error": f"Scan {scan_id} not found"}
+
+            # Redis client is used both for progress pub/sub and duplicate-run lock.
+            try:
+                import redis
+                redis_client = redis.Redis.from_url(settings.redis_url)
+            except Exception as redis_exc:
+                redis_client = None
+                logger.warning("Scan %s: Redis unavailable (%s), proceeding without distributed lock", scan_id, redis_exc)
+
+            if redis_client is not None:
+                has_scan_lock = _acquire_scan_run_lock(redis_client, scan_id, lock_owner, lock_ttl_seconds)
+                if not has_scan_lock:
+                    task_status = "duplicate_skipped"
+                    record_worker_phase(task_name, "duplicate_skipped")
+                    logger.warning(
+                        "Duplicate run_scan execution detected for scan %s (task %s); skipping this worker process",
+                        scan_id,
+                        self.request.id,
+                    )
+                    return {"status": "duplicate_skipped", "scan_id": scan_id}
 
             # Get already processed files if resuming
             processed_paths = set()
@@ -253,11 +317,6 @@ def run_scan(
                 ocr_service = get_ocr_service()
                 meili_service = get_meilisearch_service()
 
-                # Redis for real-time progress publishing
-                import redis
-
-                redis_client = redis.Redis.from_url(settings.redis_url)
-
                 # ═══ PASS 1: DISCOVERY ═══
                 record_worker_phase(task_name, "discovery_started")
                 self.update_state(
@@ -268,18 +327,21 @@ def run_scan(
                 def on_discovery_progress(discovered_count: int):
                     scan.total_files = discovered_count
                     db.commit()
-                    redis_client.publish(
-                        f"scan:{scan_id}:progress",
-                        json.dumps(
-                            {
-                                "phase": "detection",
-                                "discovered": discovered_count,
-                                "progress": 0,
-                                "status": "discovering",
-                                "request_id": bound_request_id,
-                            }
-                        ),
-                    )
+                    if redis_client is not None:
+                        redis_client.publish(
+                            f"scan:{scan_id}:progress",
+                            json.dumps(
+                                {
+                                    "phase": "detection",
+                                    "discovered": discovered_count,
+                                    "progress": 0,
+                                    "status": "discovering",
+                                    "request_id": bound_request_id,
+                                }
+                            ),
+                        )
+                    if has_scan_lock and redis_client is not None:
+                        _refresh_scan_run_lock(redis_client, scan_id, lock_owner, lock_ttl_seconds)
 
                 files = discover_files_streaming(scan.path, ocr_service, on_discovery_progress)
                 record_worker_phase(task_name, "discovery_completed")
@@ -291,6 +353,8 @@ def run_scan(
                 else:
                     scan.total_files = len(files)
                 db.commit()
+                if has_scan_lock and redis_client is not None:
+                    _refresh_scan_run_lock(redis_client, scan_id, lock_owner, lock_ttl_seconds)
 
                 if not files:
                     scan.status = ScanStatus.COMPLETED
@@ -374,6 +438,8 @@ def run_scan(
                         # Entire batch was skipped — update progress and continue
                         scan.processed_files = processed
                         db.commit()
+                        if has_scan_lock and redis_client is not None:
+                            _refresh_scan_run_lock(redis_client, scan_id, lock_owner, lock_ttl_seconds)
                         self.update_state(
                             state="PROGRESS",
                             meta={
@@ -529,6 +595,8 @@ def run_scan(
                     scan.processed_files = processed
                     scan.failed_files = failed
                     db.commit()
+                    if has_scan_lock and redis_client is not None:
+                        _refresh_scan_run_lock(redis_client, scan_id, lock_owner, lock_ttl_seconds)
 
                     # Update Celery state for SSE
                     effective_progress = (processed / scan.total_files) * 100 if scan.total_files > 0 else 0
@@ -611,6 +679,8 @@ def run_scan(
                 record_worker_phase(task_name, "failed", status="error")
                 raise
     finally:
+        if has_scan_lock and redis_client is not None:
+            _release_scan_run_lock(redis_client, scan_id, lock_owner)
         record_worker_task(task_name, task_status, time.perf_counter() - started_at)
         reset_request_id(token)
 
